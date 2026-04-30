@@ -17,7 +17,7 @@ async fn test_cache_miss_then_hit() {
                 let mut response = http::Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/json")
-                    .body(http_body_util::Full::new(bytes::Bytes::from(
+                    .body(rapina::response::full(bytes::Bytes::from(
                         r#"{"value":42}"#,
                     )))
                     .unwrap();
@@ -54,7 +54,7 @@ async fn test_cache_strips_internal_ttl_header() {
             Router::new().route(http::Method::GET, "/data", |_, _, _| async {
                 let mut response = http::Response::builder()
                     .status(StatusCode::OK)
-                    .body(http_body_util::Full::new(bytes::Bytes::from("ok")))
+                    .body(rapina::response::full(bytes::Bytes::from("ok")))
                     .unwrap();
                 response
                     .headers_mut()
@@ -116,7 +116,7 @@ async fn test_mutation_invalidates_cache() {
                 .route(http::Method::GET, "/items", |_, _, _| async {
                     let mut response = http::Response::builder()
                         .status(StatusCode::OK)
-                        .body(http_body_util::Full::new(bytes::Bytes::from("items")))
+                        .body(rapina::response::full(bytes::Bytes::from("items")))
                         .unwrap();
                     response
                         .headers_mut()
@@ -160,7 +160,7 @@ async fn test_cache_preserves_response_headers() {
                     .status(StatusCode::OK)
                     .header("content-type", "application/json")
                     .header("x-custom", "preserved")
-                    .body(http_body_util::Full::new(bytes::Bytes::from("{}")))
+                    .body(rapina::response::full(bytes::Bytes::from("{}")))
                     .unwrap();
                 response
                     .headers_mut()
@@ -195,7 +195,7 @@ async fn test_cache_only_caches_get() {
             Router::new().route(http::Method::POST, "/data", |_, _, _| async {
                 let mut response = http::Response::builder()
                     .status(StatusCode::CREATED)
-                    .body(http_body_util::Full::new(bytes::Bytes::from("created")))
+                    .body(rapina::response::full(bytes::Bytes::from("created")))
                     .unwrap();
                 response
                     .headers_mut()
@@ -224,7 +224,7 @@ async fn test_cache_query_params_affect_key() {
                 let query = req.uri().query().unwrap_or("none").to_string();
                 let mut response = http::Response::builder()
                     .status(StatusCode::OK)
-                    .body(http_body_util::Full::new(bytes::Bytes::from(query)))
+                    .body(rapina::response::full(bytes::Bytes::from(query)))
                     .unwrap();
                 response
                     .headers_mut()

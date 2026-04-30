@@ -3,7 +3,6 @@
 //! Extractors are types that implement [`FromRequest`] or [`FromRequestParts`]
 //! and can be used as handler parameters to automatically parse request data.
 
-use bytes::Bytes;
 use http::Request;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -456,7 +455,7 @@ impl<T: serde::Serialize> IntoResponse for (http::StatusCode, Json<T>) {
         http::Response::builder()
             .status(self.0)
             .header(CONTENT_TYPE, APPLICATION_JSON)
-            .body(http_body_util::Full::new(Bytes::from(body)))
+            .body(crate::response::full(body))
             .unwrap()
     }
 }

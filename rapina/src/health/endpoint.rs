@@ -16,7 +16,7 @@ use hyper::body::Incoming;
 use crate::{
     extract::PathParams,
     health::config::HealthRegistry,
-    response::{APPLICATION_JSON, BoxBody},
+    response::{APPLICATION_JSON, BoxBody, full},
     state::AppState,
 };
 
@@ -36,9 +36,7 @@ pub async fn liveness_check(
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, APPLICATION_JSON)
-        .body(http_body_util::Full::new(bytes::Bytes::from(
-            serde_json::to_vec(&body).unwrap_or_default(),
-        )))
+        .body(full(serde_json::to_vec(&body).unwrap_or_default()))
         .unwrap()
 }
 
@@ -109,9 +107,7 @@ pub async fn readiness_check(
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, APPLICATION_JSON)
-        .body(http_body_util::Full::new(bytes::Bytes::from(
-            serde_json::to_vec(&body).unwrap_or_default(),
-        )))
+        .body(full(serde_json::to_vec(&body).unwrap_or_default()))
         .unwrap()
 }
 

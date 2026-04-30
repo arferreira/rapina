@@ -29,9 +29,7 @@ use serde::Serialize;
 use std::fmt;
 
 use crate::response::{APPLICATION_JSON, APPLICATION_PROBLEM_JSON, BoxBody, IntoResponse};
-use bytes::Bytes;
 use http::header::CONTENT_TYPE;
-use http_body_util::Full;
 
 /// Configuration for error response format.
 ///
@@ -431,7 +429,7 @@ impl IntoResponse for Error {
             http::Response::builder()
                 .status(self.0.status)
                 .header(CONTENT_TYPE, APPLICATION_PROBLEM_JSON)
-                .body(Full::new(Bytes::from(body)))
+                .body(crate::response::full(body))
                 .unwrap()
         } else {
             let response = standard::ErrorResponse {
@@ -447,7 +445,7 @@ impl IntoResponse for Error {
             http::Response::builder()
                 .status(self.0.status)
                 .header(CONTENT_TYPE, APPLICATION_JSON)
-                .body(Full::new(Bytes::from(body)))
+                .body(crate::response::full(body))
                 .unwrap()
         }
     }

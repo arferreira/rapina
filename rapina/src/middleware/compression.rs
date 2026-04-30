@@ -1,15 +1,18 @@
 use std::io::Write;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::write::{DeflateEncoder, GzEncoder};
 use http::{HeaderValue, Response, header};
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::Request;
-use hyper::body::Incoming;
+use hyper::body::{Body, Frame, Incoming, SizeHint};
+use pin_project_lite::pin_project;
 
 use crate::context::RequestContext;
-use crate::response::{APPLICATION_JSON, BoxBody};
+use crate::response::{APPLICATION_JSON, BodyError, BoxBody, empty, full};
 
 use super::{BoxFuture, Middleware, Next};
 
@@ -153,6 +156,19 @@ impl Middleware for CompressionMiddleware {
 
             let response = next.run(req).await;
 
+            // SSE bodies must never be compressed: gzip across event boundaries
+            // breaks framing at proxies. See Starlette's GZipMiddleware (commit
+            // a9a8dab, Feb 2025) for the same exclusion.
+            let is_event_stream = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.starts_with("text/event-stream"))
+                .unwrap_or(false);
+            if is_event_stream {
+                return response;
+            }
+
             let algorithm = match algorithm {
                 Some(alg)
                     if !Self::is_already_encoded(&response)
@@ -165,28 +181,46 @@ impl Middleware for CompressionMiddleware {
                 _ => return response,
             };
 
+            // Streaming path: per-chunk compression with persistent encoder
+            // state. We commit to compressing because the `min_size` guard
+            // and "not worth it" check from the buffered path don't apply,
+            // the total size isn't knowable in advance.
+            let level = Compression::new(self.config.level);
+            if response.body().size_hint().exact().is_none() {
+                let (mut parts, body) = response.into_parts();
+                let wrapped = StreamingCompressedBody::new(body, algorithm, level).boxed_unsync();
+                parts.headers.insert(
+                    header::CONTENT_ENCODING,
+                    HeaderValue::from_static(algorithm.content_encoding()),
+                );
+                parts.headers.remove(header::CONTENT_LENGTH);
+                parts
+                    .headers
+                    .insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+                return Response::from_parts(parts, wrapped);
+            }
+
             let (parts, body) = response.into_parts();
             let body_bytes = match body.collect().await {
                 Ok(collected) => collected.to_bytes(),
-                Err(_) => return Response::from_parts(parts, Full::new(Bytes::new())),
+                Err(_) => return Response::from_parts(parts, empty()),
             };
 
             if body_bytes.len() < self.config.min_size {
-                return Response::from_parts(parts, Full::new(body_bytes));
+                return Response::from_parts(parts, full(body_bytes));
             }
 
-            let level = Compression::new(self.config.level);
             let compressed = match algorithm.compress(&body_bytes, level) {
                 Ok(data) => data,
-                Err(_) => return Response::from_parts(parts, Full::new(body_bytes)),
+                Err(_) => return Response::from_parts(parts, full(body_bytes)),
             };
 
             // not worth it
             if compressed.len() >= body_bytes.len() {
-                return Response::from_parts(parts, Full::new(body_bytes));
+                return Response::from_parts(parts, full(body_bytes));
             }
 
-            let mut response = Response::from_parts(parts, Full::new(Bytes::from(compressed)));
+            let mut response = Response::from_parts(parts, full(Bytes::from(compressed)));
             response.headers_mut().insert(
                 header::CONTENT_ENCODING,
                 HeaderValue::from_static(algorithm.content_encoding()),
@@ -198,6 +232,146 @@ impl Middleware for CompressionMiddleware {
 
             response
         })
+    }
+}
+
+pin_project! {
+    /// Streaming compressor wrapper. Owns the upstream body and a persistent
+    /// encoder; emits compressed chunks as upstream chunks arrive. Per Phase 3
+    /// of the streaming plan: large file streams should not be buffered.
+    struct StreamingCompressedBody {
+        #[pin]
+        inner: BoxBody,
+        encoder: Option<StreamingEncoder>,
+        tail: Option<Bytes>,
+        done: bool,
+    }
+}
+
+impl StreamingCompressedBody {
+    fn new(inner: BoxBody, algorithm: Algorithm, level: Compression) -> Self {
+        Self {
+            inner,
+            encoder: Some(StreamingEncoder::new(algorithm, level)),
+            tail: None,
+            done: false,
+        }
+    }
+}
+
+impl Body for StreamingCompressedBody {
+    type Data = Bytes;
+    type Error = BodyError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BodyError>>> {
+        let mut this = self.project();
+
+        // Emit any leftover tail from a previous finish() before signalling end.
+        if let Some(tail) = this.tail.take() {
+            return Poll::Ready(Some(Ok(Frame::data(tail))));
+        }
+        if *this.done {
+            return Poll::Ready(None);
+        }
+
+        loop {
+            match this.inner.as_mut().poll_frame(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Some(Err(e))) => {
+                    tracing::error!("compression upstream body yielded error: {}", e);
+                    return Poll::Ready(Some(Err(e)));
+                }
+                Poll::Ready(Some(Ok(frame))) => {
+                    if let Ok(data) = frame.into_data() {
+                        let encoder = this
+                            .encoder
+                            .as_mut()
+                            .expect("encoder present until upstream end");
+                        if let Err(e) = encoder.write(&data) {
+                            tracing::error!("compression encoder write failed: {}", e);
+                            return Poll::Ready(Some(Err(Box::new(e))));
+                        }
+                        let chunk = encoder.drain();
+                        if !chunk.is_empty() {
+                            return Poll::Ready(Some(Ok(Frame::data(chunk))));
+                        }
+                        // Encoder buffered internally; pull more from upstream.
+                        continue;
+                    }
+                    // Trailers/non-data frames: pass through.
+                    // (BoxBody from rapina never carries trailers today.)
+                    continue;
+                }
+                Poll::Ready(None) => {
+                    let encoder = match this.encoder.take() {
+                        Some(e) => e,
+                        None => {
+                            *this.done = true;
+                            return Poll::Ready(None);
+                        }
+                    };
+                    let tail = match encoder.finish() {
+                        Ok(bytes) => Bytes::from(bytes),
+                        Err(e) => {
+                            tracing::error!("compression encoder finish failed: {}", e);
+                            return Poll::Ready(Some(Err(Box::new(e))));
+                        }
+                    };
+                    *this.done = true;
+                    if tail.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    return Poll::Ready(Some(Ok(Frame::data(tail))));
+                }
+            }
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::default()
+    }
+}
+
+enum StreamingEncoder {
+    Gzip(GzEncoder<Vec<u8>>),
+    Deflate(DeflateEncoder<Vec<u8>>),
+}
+
+impl StreamingEncoder {
+    fn new(alg: Algorithm, level: Compression) -> Self {
+        match alg {
+            Algorithm::Gzip => Self::Gzip(GzEncoder::new(Vec::new(), level)),
+            Algorithm::Deflate => Self::Deflate(DeflateEncoder::new(Vec::new(), level)),
+        }
+    }
+
+    fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::Gzip(e) => e.write_all(data),
+            Self::Deflate(e) => e.write_all(data),
+        }
+    }
+
+    /// Take whatever output bytes the encoder has buffered so far. Empty if
+    /// the encoder is still accumulating internally. Reuses the buffer's
+    /// capacity across drains so long streams don't reallocate per chunk.
+    fn drain(&mut self) -> Bytes {
+        let buf = match self {
+            Self::Gzip(e) => e.get_mut(),
+            Self::Deflate(e) => e.get_mut(),
+        };
+        let cap = buf.capacity();
+        Bytes::from(std::mem::replace(buf, Vec::with_capacity(cap)))
+    }
+
+    fn finish(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Gzip(e) => e.finish(),
+            Self::Deflate(e) => e.finish(),
+        }
     }
 }
 

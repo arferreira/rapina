@@ -36,8 +36,6 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-use http_body_util::Full;
 use schemars::JsonSchema;
 use sea_orm::{EntityTrait, PaginatorTrait, Select};
 use serde::{Deserialize, Serialize};
@@ -198,7 +196,7 @@ impl<T: Serialize> IntoResponse for Paginated<T> {
         http::Response::builder()
             .status(http::StatusCode::OK)
             .header("content-type", "application/json")
-            .body(Full::new(Bytes::from(body)))
+            .body(crate::response::full(body))
             .unwrap()
     }
 }

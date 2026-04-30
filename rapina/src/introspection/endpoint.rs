@@ -7,7 +7,7 @@ use hyper::body::Incoming;
 
 use crate::extract::PathParams;
 use crate::introspection::RouteInfo;
-use crate::response::{APPLICATION_JSON, BoxBody, IntoResponse};
+use crate::response::{APPLICATION_JSON, BoxBody, IntoResponse, full};
 use crate::state::AppState;
 
 /// Registry of route information stored in application state.
@@ -52,7 +52,7 @@ pub async fn list_routes(
             Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, APPLICATION_JSON)
-                .body(http_body_util::Full::new(bytes::Bytes::from(json)))
+                .body(full(json))
                 .unwrap()
         }
         None => StatusCode::NOT_FOUND.into_response(),

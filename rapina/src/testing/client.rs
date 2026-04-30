@@ -391,8 +391,8 @@ mod tests {
                     http::Response::builder()
                         .status(StatusCode::OK)
                         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
-                        .body(http_body_util::Full::new(bytes::Bytes::from(
-                            r#"{"id":1,"name":"test"}"#,
+                        .body(crate::response::full(bytes::Bytes::from_static(
+                            br#"{"id":1,"name":"test"}"#,
                         )))
                         .unwrap()
                 }),

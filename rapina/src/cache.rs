@@ -26,13 +26,13 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use dashmap::DashMap;
 use http::{Response, header};
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use hyper::Request;
-use hyper::body::Incoming;
+use hyper::body::{Body, Incoming};
 
 use crate::context::RequestContext;
 use crate::middleware::{BoxFuture, Middleware, Next};
-use crate::response::BoxBody;
+use crate::response::{BoxBody, empty, full};
 
 /// Internal header injected by the `#[cache(ttl = N)]` macro.
 /// The middleware reads this to determine caching behavior, then strips it.
@@ -257,13 +257,26 @@ impl Middleware for CacheMiddleware {
 
                 // Check if handler wants caching
                 if let Some(ttl) = extract_ttl_header(&response) {
+                    // Streaming bodies cannot be captured as a single Bytes blob.
+                    // A handler asking to cache one is a programming error: log
+                    // a warning so the operator notices the #[cache] is silently
+                    // being ignored, then pass the response through unchanged.
+                    if response.body().size_hint().exact().is_none() {
+                        tracing::warn!(
+                            path = %path,
+                            ttl,
+                            "cache middleware: streaming response cannot be cached, \
+                             passthrough. Remove #[cache] from this handler."
+                        );
+                        return response;
+                    }
                     let (parts, body) = response.into_parts();
                     let body_bytes = match body.collect().await {
                         Ok(collected) => collected.to_bytes(),
                         Err(_) => {
                             return Response::builder()
                                 .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Full::new(Bytes::new()))
+                                .body(empty())
                                 .unwrap();
                         }
                     };
@@ -288,7 +301,7 @@ impl Middleware for CacheMiddleware {
                         .await;
 
                     // Return response without the internal header, with MISS marker
-                    let mut response = Response::from_parts(parts, Full::new(body_bytes));
+                    let mut response = Response::from_parts(parts, full(body_bytes));
                     response.headers_mut().remove(CACHE_TTL_HEADER);
                     response
                         .headers_mut()
@@ -362,7 +375,7 @@ fn build_response_from_cache(cached: CachedResponse, status: &'static str) -> Re
         }
     }
 
-    let mut response = builder.body(Full::new(cached.body)).unwrap();
+    let mut response = builder.body(full(cached.body)).unwrap();
 
     response
         .headers_mut()

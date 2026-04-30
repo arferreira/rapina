@@ -6,7 +6,7 @@ use http::{Request, Response, StatusCode, header::CONTENT_TYPE};
 use hyper::body::Incoming;
 
 use crate::extract::PathParams;
-use crate::response::{BoxBody, IntoResponse};
+use crate::response::{BoxBody, IntoResponse, full};
 use crate::state::AppState;
 
 /// Stores the pre-generated llms.txt content.
@@ -48,7 +48,7 @@ pub async fn llms_txt_handler(
             Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-                .body(http_body_util::Full::new(body))
+                .body(full(body))
                 .unwrap()
         }
         None => StatusCode::NOT_FOUND.into_response(),

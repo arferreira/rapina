@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 use http::{Request, Response, StatusCode};
-use http_body_util::Full;
 use hyper::body::Incoming;
 use prometheus::{
     CounterVec, Encoder, HistogramOpts, HistogramVec, IntGauge, Opts, Registry, TextEncoder,
@@ -98,12 +96,12 @@ pub async fn metrics_handler(
             Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, PROMETHEUS_TEXT_FORMAT)
-                .body(Full::new(Bytes::from(body)))
+                .body(crate::response::full(body))
                 .unwrap()
         }
         None => Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
-            .body(Full::new(Bytes::new()))
+            .body(crate::response::empty())
             .unwrap(),
     }
 }

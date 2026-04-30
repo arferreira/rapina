@@ -138,7 +138,7 @@ impl CorsMiddleware {
 
         builder = builder.header(header::VARY, "Origin");
 
-        builder.body(BoxBody::default()).unwrap()
+        builder.body(crate::response::empty()).unwrap()
     }
 
     fn add_cors_headers(&self, response: &mut Response<BoxBody>, origin: &Option<HeaderValue>) {
@@ -367,7 +367,7 @@ mod tests {
     fn empty_response() -> Response<BoxBody> {
         Response::builder()
             .status(StatusCode::OK)
-            .body(BoxBody::default())
+            .body(crate::response::empty())
             .unwrap()
     }
 

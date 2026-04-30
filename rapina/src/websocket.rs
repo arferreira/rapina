@@ -64,6 +64,8 @@ impl FromRequest for WebSocketUpgrade {
         }
         let (response, websocket) = hyper_tungstenite::upgrade(&mut req, None)
             .map_err(|e| Error::internal(format!("WebSocket upgrade failed: {e}")))?;
+        let (parts, _) = response.into_parts();
+        let response = Response::from_parts(parts, crate::response::empty());
         Ok(Self {
             response,
             websocket,

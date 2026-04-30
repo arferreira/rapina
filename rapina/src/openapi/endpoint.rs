@@ -8,7 +8,7 @@ use hyper::body::Incoming;
 use crate::{
     extract::PathParams,
     openapi::OpenApiSpec,
-    response::{APPLICATION_JSON, BoxBody},
+    response::{APPLICATION_JSON, BoxBody, full},
     state::AppState,
 };
 
@@ -44,14 +44,14 @@ pub async fn openapi_spec(
             Response::builder()
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, APPLICATION_JSON)
-                .body(http_body_util::Full::new(bytes::Bytes::from(json)))
+                .body(full(json))
                 .unwrap()
         }
         None => Response::builder()
             .status(StatusCode::NOT_FOUND)
             .header(CONTENT_TYPE, APPLICATION_JSON)
-            .body(http_body_util::Full::new(bytes::Bytes::from(
-                r#"{"error": "OpenAPI spec not configured"}"#,
+            .body(full(bytes::Bytes::from_static(
+                br#"{"error": "OpenAPI spec not configured"}"#,
             )))
             .unwrap(),
     }
