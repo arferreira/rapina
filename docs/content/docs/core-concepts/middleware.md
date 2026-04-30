@@ -80,7 +80,14 @@ CompressionConfig::default()
 CompressionConfig::new(512, 9)  // min 512 bytes, maximum compression
 ```
 
-Compression is skipped when the client does not send `Accept-Encoding: gzip` or `deflate`, the response already has a `Content-Encoding` header, the `Content-Type` is not compressible (e.g. `image/png`), or the body is smaller than `min_size`. `Vary: Accept-Encoding` is added automatically for correct proxy caching.
+Compression is skipped when the client does not send `Accept-Encoding: gzip` or `deflate`, the response already has a `Content-Encoding` header, the `Content-Type` is not compressible (e.g. `image/png`), or (for buffered bodies) the body is smaller than `min_size`. `Vary: Accept-Encoding` is added automatically for correct proxy caching.
+
+### Streaming bodies
+
+`StreamResponse` and `SseResponse` (see [Streaming & SSE](@/docs/core-concepts/streaming.md)) are handled differently:
+
+- **`text/event-stream`**: never compressed. Gzip across event boundaries breaks SSE framing at proxies.
+- **Other streaming bodies**: compressed per-chunk with a persistent gzip/deflate encoder. The `min_size` and "compression not worth it" guards don't apply, since the total size isn't known in advance. Streaming bodies always get compressed when the client accepts it. `Content-Length` is removed; the response uses chunked transfer encoding.
 
 ---
 
