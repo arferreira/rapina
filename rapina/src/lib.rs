@@ -156,7 +156,9 @@ pub mod prelude {
     pub use crate::middleware::{RapinaService, TowerLayerMiddleware};
     pub use crate::observability::TracingConfig;
     #[cfg(feature = "database")]
-    pub use crate::pagination::{Paginate, Paginated, PaginationConfig};
+    pub use crate::pagination::{
+        CursorKey, CursorPaginate, CursorPaginated, Paginate, Paginated, PaginationConfig,
+    };
     #[cfg(feature = "websocket")]
     pub use crate::relay::{Relay, RelayConfig, RelayEvent};
     pub use crate::response::{IntoResponse, StaticStr};

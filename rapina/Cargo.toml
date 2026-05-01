@@ -84,6 +84,7 @@ sea-orm = { version = "1.1", optional = true, features = ["runtime-tokio-rustls"
 # Database migration (optional)
 sea-orm-migration = { version = "1.1", optional = true, features = ["runtime-tokio-rustls"] }
 async-trait = { version = "0.1", optional = true }
+base64 = { version = "0.22", optional = true }
 
 # Prometheus (optional)
 prometheus = { version = '0.13', optional = true }
@@ -134,7 +135,7 @@ required-features = ["multipart"]
 default = ["compression", "rate-limit"]
 rate-limit = []
 compression = ["flate2"]
-database = ["sea-orm", "sea-orm-migration", "async-trait"]
+database = ["sea-orm", "sea-orm-migration", "async-trait", "base64"]
 postgres = ["database", "sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 mysql = ["database", "sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
 sqlite = ["database", "sea-orm/sqlx-sqlite", "sea-orm-migration/sqlx-sqlite"]
