@@ -1,4 +1,5 @@
 use rapina::database::{Db, DbError};
+use rapina::pagination::{CursorPaginate, CursorPaginated};
 use rapina::prelude::*;
 use rapina::sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, PaginatorTrait, Set};
 
@@ -15,6 +16,15 @@ use crate::AppConfig;
 pub async fn list_todos(db: Db) -> Result<Json<Vec<Model>>> {
     let todos = Todo::find().all(db.conn()).await.map_err(DbError)?;
     Ok(Json(todos))
+}
+
+#[get("/todos/cursor")]
+#[errors(TodoError)]
+pub async fn list_todos_cursor(
+    db: Db,
+    cursor: CursorPaginate<i32>,
+) -> Result<CursorPaginated<Model>> {
+    cursor.exec(Todo::find(), db.conn()).await
 }
 
 #[get("/todos/:id")]
