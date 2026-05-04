@@ -5,7 +5,7 @@ weight = 6
 date = 2025-02-27
 +++
 
-Every list endpoint needs the same boilerplate: LIMIT/OFFSET, a count query, and response metadata. Rapina handles this with a `Paginate` extractor and a `Paginated<T>` response wrapper.
+List endpoints come in two shapes: page-numbered (`?page=2&per_page=20`) and cursor-based (`?after=<token>&limit=20`). Rapina ships both as first-class primitives. Use the offset-style `Paginate` / `Paginated<T>` for random page access, and `CursorPaginate` / `CursorPaginated<T>` for stable feeds and infinite scroll.
 
 ## Quick Start
 
