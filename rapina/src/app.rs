@@ -100,7 +100,18 @@ pub struct Rapina {
     pub(crate) jobs_config: Option<crate::jobs::JobConfig>,
     #[cfg(feature = "cron-scheduler")]
     pub(crate) cron_scheduler: Option<CronScheduler>,
+    /// Tracing/logging configuration, applied when the server starts.
+    pub(crate) tracing_config: Option<TracingConfig>,
+    /// OTLP telemetry export configuration (if enabled)
+    #[cfg(feature = "otel")]
+    pub(crate) telemetry_config: Option<crate::observability::TelemetryConfig>,
 }
+
+/// Tracks whether the process-global telemetry pipeline has been installed, so a
+/// second `listen` does not build a second exporter or silently fail to install.
+#[cfg(feature = "otel")]
+static TELEMETRY_INITIALIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 // Resolves the listen address, preferring RAPINA_HOST/RAPINA_PORT over addr when both are set.
 pub(crate) fn resolve_listen_addr(addr: &str) -> SocketAddr {
@@ -145,6 +156,9 @@ impl Rapina {
             jobs_config: None,
             #[cfg(feature = "cron-scheduler")]
             cron_scheduler: None,
+            tracing_config: None,
+            #[cfg(feature = "otel")]
+            telemetry_config: None,
         }
     }
 
@@ -431,8 +445,28 @@ impl Rapina {
     }
 
     /// Configures tracing/logging for the application.
-    pub fn with_tracing(self, config: TracingConfig) -> Self {
-        config.init();
+    ///
+    /// The subscriber is installed when the server starts (in [`listen`]), so it
+    /// can be composed with the OTLP export layer from [`with_telemetry`] onto a
+    /// single global subscriber.
+    ///
+    /// [`listen`]: Self::listen
+    /// [`with_telemetry`]: Self::with_telemetry
+    pub fn with_tracing(mut self, config: TracingConfig) -> Self {
+        self.tracing_config = Some(config);
+        self
+    }
+
+    /// Configures OTLP trace export to a collector such as Jaeger or Datadog.
+    ///
+    /// Traces are exported over OTLP gRPC and incoming W3C `traceparent` headers
+    /// are honored so traces continue across service boundaries. The exporter is
+    /// built and the subscriber installed when the server starts (in [`listen`]).
+    ///
+    /// [`listen`]: Self::listen
+    #[cfg(feature = "otel")]
+    pub fn with_telemetry(mut self, config: crate::observability::TelemetryConfig) -> Self {
+        self.telemetry_config = Some(config);
         self
     }
 
@@ -895,6 +929,14 @@ impl Rapina {
             base_uri: self.rfc7807_base_uri.clone(),
         });
 
+        // Trace context propagation runs first so the request span carries the
+        // parent extracted from incoming headers and wraps every other layer.
+        #[cfg(feature = "otel")]
+        if self.telemetry_config.is_some() {
+            self.middlewares
+                .prepend(crate::middleware::TraceContextMiddleware::new());
+        }
+
         // Auto-discover routes from inventory (must run before auth middleware)
         if self.auto_discover {
             let manual_count = self.router.routes.len();
@@ -1035,7 +1077,62 @@ impl Rapina {
     /// in dev mode and the banner is correct by construction.
     pub async fn listen(self, addr: &str) -> std::io::Result<()> {
         let addr: SocketAddr = resolve_listen_addr(addr);
+
+        // Install the tracing subscriber before anything else so startup logs are
+        // captured. When telemetry is configured the OTLP export layer is composed
+        // onto the same subscriber, since a global subscriber can only be set once.
+        // The global state (subscriber, tracer provider, propagator) is installed
+        // at most once per process; a second `listen` reuses it.
+        let tracing_config = self.tracing_config.clone();
+        #[cfg(feature = "otel")]
+        let otel_provider = match self.telemetry_config.clone() {
+            Some(config)
+                if !TELEMETRY_INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) =>
+            {
+                let (provider, layer) = crate::observability::build_otel_pipeline(&config)
+                    .map_err(std::io::Error::other)?;
+                opentelemetry::global::set_tracer_provider(provider.clone());
+                opentelemetry::global::set_text_map_propagator(
+                    opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+                );
+                if crate::observability::init_subscriber(tracing_config, Some(layer)).is_err() {
+                    eprintln!(
+                        "rapina: telemetry is enabled but a tracing subscriber is already installed; \
+                         OTLP traces will not be exported"
+                    );
+                }
+                Some(provider)
+            }
+            Some(_) => {
+                eprintln!("rapina: telemetry already initialized; ignoring repeated configuration");
+                None
+            }
+            None => {
+                let _ = crate::observability::init_subscriber(tracing_config, None);
+                None
+            }
+        };
+        #[cfg(not(feature = "otel"))]
+        let _ = crate::observability::init_subscriber(tracing_config, None);
+
         let app = self.prepare();
+
+        // Flush exported spans during graceful shutdown so in-flight traces are
+        // not dropped. The hook runs after connections drain.
+        #[cfg(feature = "otel")]
+        let app = {
+            let mut app = app;
+            if let Some(provider) = otel_provider {
+                app.shutdown_hooks.push(Box::new(move || {
+                    Box::pin(async move {
+                        // shutdown joins the exporter's background thread, so run it
+                        // off the async runtime worker.
+                        let _ = tokio::task::spawn_blocking(move || provider.shutdown()).await;
+                    })
+                }));
+            }
+            app
+        };
 
         // Spawn the background job worker if configured.  The worker receives
         // a cheap clone of AppState (inner values are Arc-wrapped) so it shares

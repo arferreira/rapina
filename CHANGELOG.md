@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **OpenTelemetry OTLP tracing exporter**: `with_telemetry(TelemetryConfig { endpoint, service_name, sample_rate })` exports traces over OTLP gRPC to a collector such as Jaeger or Datadog, behind the `otel` feature. Incoming W3C `traceparent` headers are honored so traces continue across service boundaries, request spans follow the HTTP semantic conventions and carry the response status, the OTel `trace_id`/`span_id` are recorded on the request span so logs correlate with the exported trace, and pending spans are flushed on graceful shutdown. Plaintext gRPC by default; enable `otel-tls` for `https://` collectors (#93).
+
+### Changed
+- `with_tracing` now installs the tracing subscriber when the server starts (in `listen`) rather than at call time, so it can be composed with the OTLP export layer onto a single global subscriber.
+
 ## [0.12.0] - 2026-05-15
 
 ### Added

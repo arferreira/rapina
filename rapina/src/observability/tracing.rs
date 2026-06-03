@@ -1,5 +1,7 @@
 use tracing::Level;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::{SubscriberInitExt, TryInitError};
+use tracing_subscriber::{EnvFilter, Layer, Registry, fmt};
 
 /// Configuration for the tracing/logging system.
 ///
@@ -81,26 +83,52 @@ impl TracingConfig {
 
     /// Initializes the tracing subscriber with this configuration.
     pub fn init(self) {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(self.level.to_string()));
-
-        if self.json {
-            fmt()
-                .with_env_filter(filter)
-                .with_target(self.with_target)
-                .with_file(self.with_file)
-                .with_line_number(self.with_line_number)
-                .json()
-                .init();
-        } else {
-            fmt()
-                .with_env_filter(filter)
-                .with_target(self.with_target)
-                .with_file(self.with_file)
-                .with_line_number(self.with_line_number)
-                .init();
-        }
+        let _ = init_subscriber(Some(self), None);
     }
+}
+
+/// Builds the stdout formatting layer for the given configuration.
+fn fmt_layer(config: &TracingConfig) -> Box<dyn Layer<Registry> + Send + Sync> {
+    let layer = fmt::layer()
+        .with_target(config.with_target)
+        .with_file(config.with_file)
+        .with_line_number(config.with_line_number);
+
+    if config.json {
+        layer.json().boxed()
+    } else {
+        layer.boxed()
+    }
+}
+
+/// Installs the global tracing subscriber.
+///
+/// Composes the stdout formatting layer with an optional extra layer (the OTLP
+/// export layer when telemetry is configured) onto a single `Registry`, since a
+/// global subscriber can only be set once. Does nothing when neither a tracing
+/// config nor an extra layer is given. Uses `try_init` so a second call (for
+/// example a direct `TracingConfig::init`) degrades to a no-op instead of
+/// panicking.
+pub(crate) fn init_subscriber(
+    tracing: Option<TracingConfig>,
+    extra_layer: Option<Box<dyn Layer<Registry> + Send + Sync>>,
+) -> Result<(), TryInitError> {
+    if tracing.is_none() && extra_layer.is_none() {
+        return Ok(());
+    }
+
+    let config = tracing.unwrap_or_default();
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(config.level.to_string()));
+
+    let mut layers: Vec<Box<dyn Layer<Registry> + Send + Sync>> = vec![fmt_layer(&config)];
+    if let Some(layer) = extra_layer {
+        layers.push(layer);
+    }
+
+    Registry::default()
+        .with(layers.with_filter(filter))
+        .try_init()
 }
 
 #[cfg(test)]

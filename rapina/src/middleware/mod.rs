@@ -14,6 +14,8 @@ mod body_limit;
 #[cfg(feature = "compression")]
 mod compression;
 mod cors;
+#[cfg(feature = "otel")]
+mod otel;
 #[cfg(feature = "rate-limit")]
 mod rate_limit;
 mod request_log;
@@ -26,6 +28,8 @@ pub use body_limit::BodyLimitMiddleware;
 #[cfg(feature = "compression")]
 pub use compression::{CompressionConfig, CompressionMiddleware};
 pub use cors::{AllowedHeaders, AllowedMethods, AllowedOrigins, CorsConfig, CorsMiddleware};
+#[cfg(feature = "otel")]
+pub use otel::TraceContextMiddleware;
 #[cfg(feature = "rate-limit")]
 pub use rate_limit::{KeyExtractor, RateLimitConfig, RateLimitMiddleware};
 pub use request_log::{RequestLogConfig, RequestLogMiddleware};
@@ -143,6 +147,12 @@ impl MiddlewareStack {
 
     pub fn add<M: Middleware>(&mut self, middleware: M) {
         self.middlewares.push(Arc::new(middleware));
+    }
+
+    /// Inserts a middleware at the front of the stack so it runs first.
+    #[cfg(feature = "otel")]
+    pub(crate) fn prepend<M: Middleware>(&mut self, middleware: M) {
+        self.middlewares.insert(0, Arc::new(middleware));
     }
 
     pub fn push(&mut self, middleware: Arc<dyn Middleware>) {

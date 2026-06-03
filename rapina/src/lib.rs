@@ -156,6 +156,8 @@ pub mod prelude {
     pub use crate::middleware::{Middleware, Next, RequestLogConfig};
     #[cfg(feature = "tower")]
     pub use crate::middleware::{RapinaService, TowerLayerMiddleware};
+    #[cfg(feature = "otel")]
+    pub use crate::observability::TelemetryConfig;
     pub use crate::observability::TracingConfig;
     #[cfg(feature = "database")]
     pub use crate::pagination::{
