@@ -7,7 +7,7 @@ use tracing::field::Empty;
 use tracing::{Instrument, info_span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::context::RequestContext;
+use crate::context::{MatchedPattern, RequestContext};
 use crate::response::BoxBody;
 
 use super::{BoxFuture, Middleware, Next};
@@ -57,7 +57,11 @@ impl Middleware for TraceContextMiddleware {
         let parent_cx = global::get_text_map_propagator(|propagator| {
             propagator.extract(&HeaderExtractor(req.headers()))
         });
-        let span = server_span(req.method(), req.uri().path(), parent_cx);
+        let route = req
+            .extensions()
+            .get::<MatchedPattern>()
+            .map(|m| m.as_str().to_owned());
+        let span = server_span(req.method(), req.uri().path(), route.as_deref(), parent_cx);
 
         let response_span = span.clone();
         Box::pin(
@@ -75,24 +79,33 @@ impl Middleware for TraceContextMiddleware {
 /// conventions, links it to the remote parent, and records the OTel ids onto it
 /// so log lines emitted within the span correlate with the exported trace.
 ///
-/// The route template isn't known before routing, so the span name is the
-/// method per the spec's low-cardinality fallback.
+/// Named `{method} {route}` when the router matched a template, plain method
+/// otherwise per the spec's low-cardinality fallback.
 fn server_span(
     method: &hyper::Method,
     path: &str,
+    route: Option<&str>,
     parent_cx: opentelemetry::Context,
 ) -> tracing::Span {
+    let name = match route {
+        Some(route) => format!("{method} {route}"),
+        None => method.to_string(),
+    };
     let span = info_span!(
         "http.request",
-        otel.name = %method,
+        otel.name = %name,
         otel.kind = "server",
         otel.status_code = Empty,
         http.request.method = %method,
+        http.route = Empty,
         url.path = %path,
         http.response.status_code = Empty,
         otel_trace_id = Empty,
         otel_span_id = Empty,
     );
+    if let Some(route) = route {
+        span.record("http.route", route);
+    }
     let _ = span.set_parent(parent_cx);
 
     let span_context = span.context().span().span_context().clone();
@@ -177,7 +190,12 @@ mod tests {
         // records it synchronously.
         tracing::subscriber::with_default(subscriber, || {
             let parent_cx = TraceContextPropagator::new().extract(&HeaderExtractor(&headers));
-            let span = server_span(&hyper::Method::GET, "/users/42", parent_cx);
+            let span = server_span(
+                &hyper::Method::GET,
+                "/users/42",
+                Some("/users/:id"),
+                parent_cx,
+            );
             record_response(&span, hyper::StatusCode::INTERNAL_SERVER_ERROR);
         });
 
@@ -187,6 +205,7 @@ mod tests {
 
         assert_eq!(format!("{:032x}", span.span_context.trace_id()), trace_id);
         assert_eq!(format!("{:016x}", span.parent_span_id), parent_span_id);
+        assert_eq!(span.name, "GET /users/:id");
         assert_eq!(span.status, Status::error(""));
 
         let attr = |key: &str| {
@@ -196,7 +215,45 @@ mod tests {
                 .map(|kv| kv.value.to_string())
         };
         assert_eq!(attr("http.request.method").as_deref(), Some("GET"));
+        assert_eq!(attr("http.route").as_deref(), Some("/users/:id"));
         assert_eq!(attr("url.path").as_deref(), Some("/users/42"));
         assert_eq!(attr("http.response.status_code").as_deref(), Some("500"));
+    }
+
+    #[test]
+    fn unmatched_route_falls_back_to_method_span_name() {
+        use opentelemetry::trace::TracerProvider as _;
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = Registry::default()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = server_span(
+                &hyper::Method::GET,
+                "/nope",
+                None,
+                opentelemetry::Context::new(),
+            );
+            record_response(&span, hyper::StatusCode::NOT_FOUND);
+        });
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+
+        assert_eq!(span.name, "GET");
+        assert!(
+            !span
+                .attributes
+                .iter()
+                .any(|kv| kv.key.as_str() == "http.route")
+        );
     }
 }
