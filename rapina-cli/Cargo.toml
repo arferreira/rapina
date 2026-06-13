@@ -38,6 +38,7 @@ openapiv3 = { version = "2", optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 sha2 = "0.11"
 ureq = "3.3"
+heck = { version = "0.5", optional = true }
 
 [features]
 default = []
@@ -45,7 +46,7 @@ seed = ["dep:sea-orm", "dep:tokio", "dep:fastrand", "dep:uuid"]
 seed-postgres = ["seed", "sea-orm/sqlx-postgres"]
 seed-mysql = ["seed", "sea-orm/sqlx-mysql"]
 seed-sqlite = ["seed", "sea-orm/sqlx-sqlite"]
-import = ["dep:tokio"]
+import = ["dep:tokio", "dep:heck"]
 import-postgres = [
     "import",
     "sea-schema/postgres",

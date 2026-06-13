@@ -2941,6 +2941,7 @@ dependencies = [
  "ctrlc",
  "dotenvy",
  "fastrand",
+ "heck 0.5.0",
  "notify 8.2.0",
  "notify-debouncer-mini",
  "openapiv3",

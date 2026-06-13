@@ -3,6 +3,8 @@ use std::path::Path;
 
 use super::{Colorize, FieldInfo, NormalizedType, codegen};
 
+pub(crate) mod diff;
+
 // ---------------------------------------------------------------------------
 // Intermediate representation
 // ---------------------------------------------------------------------------
@@ -658,21 +660,13 @@ fn generate_for_table(
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn database(
-    url: &str,
-    table_filter: Option<&[String]>,
-    schema_name: Option<&str>,
-    force: bool,
-) -> Result<(), String> {
-    codegen::verify_rapina_project()?;
-
-    println!();
-    println!("  {} Connecting to database...", "->".bright_cyan());
-
+/// Connect to `url` and introspect its schema into the shared IR.
+/// Used by both `database` (full import) and `diff` (drift report).
+fn introspect(url: &str, schema_name: Option<&str>) -> Result<Vec<IntrospectedTable>, String> {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("Failed to create async runtime: {}", e))?;
 
-    let tables: Vec<IntrospectedTable> = rt.block_on(async {
+    rt.block_on(async {
         if url.starts_with("postgres://") || url.starts_with("postgresql://") {
             #[cfg(feature = "import-postgres")]
             {
@@ -720,7 +714,21 @@ pub fn database(
                 url.split("://").next().unwrap_or("unknown")
             ))
         }
-    })?;
+    })
+}
+
+pub fn database(
+    url: &str,
+    table_filter: Option<&[String]>,
+    schema_name: Option<&str>,
+    force: bool,
+) -> Result<(), String> {
+    codegen::verify_rapina_project()?;
+
+    println!();
+    println!("  {} Connecting to database...", "->".bright_cyan());
+
+    let tables = introspect(url, schema_name)?;
 
     let total_discovered = tables.len();
     println!("  {} Discovered {} table(s)", "✓".green(), total_discovered);

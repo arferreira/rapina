@@ -447,72 +447,20 @@ fn parse_schema_entities() -> Result<EntitySchema, String> {
     parse_schema_content(&content)
 }
 
-/// Parse `schema!` macro blocks from source content.
+/// Parse `schema!` macro blocks into seed's `(entity, fields)` shape.
 ///
-/// Uses line-by-line matching against the known `schema!` format.
-/// This parser assumes clean `schema!` blocks without inline comments,
-/// field attributes, or multi-line type annotations. Sufficient for the
-/// standard output of `rapina add resource`.
+/// Adapter over [`super::schema_source::parse_schema_content`], which is the
+/// single parser shared with `import database --diff`. Seed only needs each
+/// field's name and type, so entity and field attributes are dropped here.
 fn parse_schema_content(content: &str) -> Result<EntitySchema, String> {
-    let mut entities = Vec::new();
-    let mut lines = content.lines().peekable();
-
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim();
-
-        if !trimmed.starts_with("schema!") {
-            continue;
-        }
-
-        let entity_name = loop {
-            match lines.next() {
-                Some(l) => {
-                    let t = l.trim();
-                    if t.is_empty() || t == "{" {
-                        continue;
-                    }
-                    if let Some(name) = t.strip_suffix('{') {
-                        break name.trim().to_string();
-                    }
-                    break t.to_string();
-                }
-                None => return Err("Unexpected end of schema! block".to_string()),
-            }
-        };
-
-        let mut fields = Vec::new();
-        let mut brace_depth = 1;
-
-        for line in lines.by_ref() {
-            let t = line.trim();
-
-            if t == "}" || t == "}}" {
-                brace_depth -= 1;
-                if brace_depth <= 0 {
-                    break;
-                }
-                continue;
-            }
-
-            if let Some((name, typ)) = t.trim_end_matches(',').split_once(':') {
-                let field_name = name.trim().to_string();
-                let field_type = typ.trim().to_string();
-                if !field_name.is_empty() && !field_type.is_empty() {
-                    fields.push((field_name, field_type));
-                }
-            }
-        }
-
-        if !fields.is_empty() {
-            entities.push((entity_name, fields));
-        }
-    }
-
-    if entities.is_empty() {
-        return Err("No schema! blocks found in src/entity.rs".to_string());
-    }
-
-    Ok(entities)
+    let entities = super::schema_source::parse_schema_content(content)?;
+    Ok(entities
+        .into_iter()
+        .map(|e| {
+            let fields = e.fields.into_iter().map(|f| (f.name, f.type_str)).collect();
+            (e.name, fields)
+        })
+        .collect())
 }
 
 // -- Fake data generation --

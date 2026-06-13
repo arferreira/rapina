@@ -27,8 +27,13 @@ pub mod new;
 pub mod openapi;
 pub(crate) mod relationships;
 pub mod routes;
+
 #[cfg(feature = "seed")]
 pub mod seed;
+
+#[cfg(any(feature = "seed", feature = "import"))]
+pub(crate) mod schema_source;
+
 pub mod templates;
 pub mod test;
 

@@ -148,6 +148,7 @@ Options:
 | `--tables <T1,T2>` | Only import specific tables (comma-separated)             | all tables          |
 | `--schema <NAME>`  | Database schema name                                      | `public` (Postgres) |
 | `--force`          | Overwrite existing files (re-import after schema changes) | false               |
+| `--diff`           | Compare entities against the live database and report drift (writes nothing) | false               |
 
 Supported databases: PostgreSQL (`postgres://`), MySQL (`mysql://`), SQLite (`sqlite://`). Each requires the corresponding feature:
 
@@ -176,6 +177,20 @@ Without `--force`, the command errors if a feature module directory already exis
 - A new migration file is always created (timestamps prevent collisions)
 
 This is useful when the upstream database schema changes and you want to regenerate the Rapina code to match.
+
+### Drift detection with `--diff`
+
+`--diff` compares the `schema!` blocks in `src/entity.rs` against the live database and reports the differences instead of generating code. Use it to catch manual database changes that never made it back into the entities, or entities that no longer match the tables.
+
+```bash
+rapina import database --url postgres://user:pass@localhost/mydb --diff
+```
+
+It reports columns that exist in code but not in the database, columns in the database with no matching field, type and nullability mismatches, missing tables, and primary key differences. A database table with no entity is reported as a note, not drift, so tables you haven't modeled don't fail the check.
+
+The exit codes suit CI: `0` when code and database agree, `2` on drift, `1` on an error such as a bad connection or unreadable `entity.rs`. `--tables` limits the comparison to specific tables. `--diff` writes nothing, so passing `--force` with it is an error.
+
+Two cases are reported as notes rather than drift because they behave the same at runtime: a `String` field against a `text` column, and a `bool` field against a MySQL `tinyint` (MySQL has no native boolean). A field whose type has no `schema!` equivalent is skipped on both sides with a warning, so a hand-added enum column won't show as false drift.
 
 ## rapina dev
 
