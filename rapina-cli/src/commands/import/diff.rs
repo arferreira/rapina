@@ -127,14 +127,18 @@ fn table_name(entity: &ParsedEntity) -> String {
 }
 
 /// A referenced entity's PK type, used to type a `belongs_to`'s `_id` column.
-/// Uuid when the entity declares `id: Uuid`, otherwise the default i32.
+/// Mirrors the macro: a single-column `#[primary_key]` resolves to that field's
+/// type; a default or composite PK is i32.
 fn entity_pk_type(entity: &ParsedEntity) -> NormalizedType {
+    let pk_name = match entity.primary_key.as_deref() {
+        Some([only]) => only.as_str(),
+        _ => return NormalizedType::I32,
+    };
     entity
         .fields
         .iter()
-        .find(|f| f.name == "id")
+        .find(|f| f.name == pk_name)
         .and_then(|f| schema_type_to_normalized(strip_option(&f.type_str).0))
-        .filter(|t| *t == NormalizedType::Uuid)
         .unwrap_or(NormalizedType::I32)
 }
 
@@ -580,6 +584,20 @@ mod tests {
         assert_eq!(fk.col_type, ImportType::Standard(NormalizedType::I32));
         assert!(!fk.is_nullable);
         assert!(table.columns.iter().all(|c| c.name != "author"));
+    }
+
+    #[test]
+    fn belongs_to_custom_pk_types_fk_to_that_pk() {
+        let mut page = entity(
+            "Page",
+            vec![field("slug", "String"), field("title", "String")],
+        );
+        page.primary_key = Some(vec!["slug".to_string()]);
+        let comment = entity("Comment", vec![field("page", "Page")]);
+        let table = reconstruct_table(&comment, std::slice::from_ref(&page)).table;
+
+        let fk = find(&table, "page_id");
+        assert_eq!(fk.col_type, ImportType::Standard(NormalizedType::String));
     }
 
     #[test]

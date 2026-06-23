@@ -23,7 +23,11 @@ pub(crate) fn parse_schema_content(content: &str) -> Result<Vec<ParsedEntity>, S
 
     while let Some(line) = lines.next() {
         if line.trim().starts_with("schema!") {
-            entities.push(parse_one_entity(&mut lines)?);
+            // One block can hold several entities (the macro parses them with
+            // `while !input.is_empty()`), so keep going until the block closes.
+            while let Some(entity) = parse_one_entity(&mut lines)? {
+                entities.push(entity);
+            }
         }
     }
 
@@ -34,7 +38,7 @@ pub(crate) fn parse_schema_content(content: &str) -> Result<Vec<ParsedEntity>, S
     Ok(entities)
 }
 
-fn parse_one_entity(lines: &mut std::str::Lines) -> Result<ParsedEntity, String> {
+fn parse_one_entity(lines: &mut std::str::Lines) -> Result<Option<ParsedEntity>, String> {
     let mut pending: Vec<&str> = Vec::new();
 
     // buffer entity attrs, then the next real line is the entity name.
@@ -43,6 +47,10 @@ fn parse_one_entity(lines: &mut std::str::Lines) -> Result<ParsedEntity, String>
         let t = line.trim();
         if t.is_empty() || t == "{" {
             continue;
+        }
+        if t == "}" {
+            // closing brace of the block, not an entity: nothing left to parse.
+            return Ok(None);
         }
         if t.starts_with("#[") {
             pending.push(t);
@@ -66,18 +74,15 @@ fn parse_one_entity(lines: &mut std::str::Lines) -> Result<ParsedEntity, String>
     pending.clear();
 
     // collect fields, buffering field attrs until the field line consumes them.
-    let mut brace_depth = 1;
+    // Entity bodies have no nested braces, so the entity closes on the first `}`,
+    // leaving the block's `}` on its own line for the next call to consume.
     for line in lines.by_ref() {
         let t = line.trim();
         if t.is_empty() {
             continue;
         }
-        if t == "}" || t == "}}" {
-            brace_depth -= 1;
-            if brace_depth <= 0 {
-                break;
-            }
-            continue;
+        if t == "}" {
+            break;
         }
         if t.starts_with("#[") {
             pending.push(t);
@@ -99,7 +104,7 @@ fn parse_one_entity(lines: &mut std::str::Lines) -> Result<ParsedEntity, String>
         pending.clear();
     }
 
-    Ok(entity)
+    Ok(Some(entity))
 }
 
 fn apply_entity_attr(line: &str, entity: &mut ParsedEntity) {
@@ -235,6 +240,25 @@ schema! {
         assert_eq!(entities.len(), 2);
         assert_eq!(entities[0].name, "User");
         assert_eq!(entities[1].name, "Post");
+    }
+
+    #[test]
+    fn parses_multiple_entities_in_one_block() {
+        let input = r#"
+schema! {
+    User {
+        name: String,
+    }
+    Post {
+        title: String,
+    }
+}
+"#;
+        let entities = parse_schema_content(input).unwrap();
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0].name, "User");
+        assert_eq!(entities[1].name, "Post");
+        assert_eq!(entities[1].fields[0].name, "title");
     }
 
     #[test]
