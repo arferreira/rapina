@@ -79,15 +79,23 @@ http_requests_in_flight 2
 
 ## Path Normalisation
 
-To prevent label cardinality explosion, pure-numeric path segments are automatically replaced with `:id`:
+The `path` label is the route pattern that matched, not the raw URL. Cardinality stays
+bounded by the number of routes you registered, so a path param never inflates the label
+set, whether it's a number, a UUID, or any other string:
 
-| Raw request path       | Label value            |
-| ---------------------- | ---------------------- |
-| `/users/42`            | `/users/:id`           |
-| `/users/123/posts/456` | `/users/:id/posts/:id` |
-| `/users/profile`       | `/users/profile`       |
+| Route definition | Raw request path                              | Label value  |
+| ---------------- | --------------------------------------------- | ------------ |
+| `/users/:id`     | `/users/42`                                   | `/users/:id` |
+| `/users/:id`     | `/users/e58ed763-928c-4155-bee9-fdbaaadc15f6` | `/users/:id` |
+| `/users/:id`     | `/users/whatever`                             | `/users/:id` |
 
-This means `/users/1`, `/users/2`, and `/users/999` all map to the same label set and are counted together.
+The label keeps the parameter name from the route definition, so `/orders/:order_id` shows
+up as `/orders/:order_id` and matches what `rapina routes` prints.
+
+Requests that match no route (404s) are labelled `<unmatched>`. They share a single time
+series, so a client probing random URLs can't explode the metric. The full request path is
+still recorded on the OpenTelemetry span (`url.path`) when tracing is enabled, which is where
+high-cardinality data belongs.
 
 ## Custom Metrics
 

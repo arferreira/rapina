@@ -10,9 +10,9 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, ClientTlsConfig, TlsCertificates};
 
-use crate::cache::{CacheBackend, CachedResponse};
+use crate::cache::{CacheBackend, CachedResponse, RedisTlsConfig};
 
 type CacheFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
@@ -45,6 +45,7 @@ impl From<StoredResponse> for CachedResponse {
 }
 
 /// Redis cache backend using multiplexed async connections.
+#[derive(Debug)]
 pub struct RedisCache {
     conn: redis::aio::MultiplexedConnection,
     prefix: String,
@@ -52,8 +53,36 @@ pub struct RedisCache {
 
 impl RedisCache {
     /// Connects to Redis at the given URL.
-    pub async fn connect(url: &str) -> Result<Self, redis::RedisError> {
-        let client = redis::Client::open(url)?;
+    pub async fn connect(
+        url: &str,
+        tls: Option<RedisTlsConfig>,
+    ) -> Result<Self, redis::RedisError> {
+        let client = match tls {
+            Some(tls) => {
+                let client_tls = match (tls.client_cert, tls.client_key) {
+                    (Some(client_cert), Some(client_key)) => Some(ClientTlsConfig {
+                        client_cert,
+                        client_key,
+                    }),
+                    (None, None) => None,
+                    _ => {
+                        return Err(redis::RedisError::from((
+                            redis::ErrorKind::InvalidClientConfig,
+                            "client_cert and client_key must be provided together",
+                        )));
+                    }
+                };
+                redis::Client::build_with_tls(
+                    url,
+                    TlsCertificates {
+                        client_tls,
+                        root_cert: tls.ca_cert,
+                    },
+                )?
+            }
+            None => redis::Client::open(url)?,
+        };
+
         let conn = client.get_multiplexed_async_connection().await?;
         Ok(Self {
             conn,
@@ -169,7 +198,7 @@ mod tests {
     #[ignore]
     #[tokio::test]
     async fn test_redis_cache_set_and_get() {
-        let cache = RedisCache::connect("redis://127.0.0.1:6379")
+        let cache = RedisCache::connect("redis://127.0.0.1:6379", None)
             .await
             .expect("Redis connection failed");
 
@@ -186,5 +215,23 @@ mod tests {
         let result = cache.get("test:key1").await;
         assert!(result.is_some());
         assert_eq!(result.unwrap().body, Bytes::from("test data"));
+    }
+
+    #[tokio::test]
+    async fn test_connect_rediss_missing_key_errors() {
+        let result = RedisCache::connect(
+            "rediss://localhost",
+            Some(RedisTlsConfig {
+                ca_cert: None,
+                client_cert: Some(b"cert".to_vec()),
+                client_key: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            result.unwrap_err().kind(),
+            redis::ErrorKind::InvalidClientConfig
+        );
     }
 }

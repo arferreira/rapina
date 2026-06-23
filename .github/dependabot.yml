@@ -7,7 +7,15 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "Update"
-
+    ignore:
+      - dependency-name: "sea-schema"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "sea-orm"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sea-orm-migration"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "sqlx"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

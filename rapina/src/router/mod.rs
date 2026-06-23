@@ -13,6 +13,7 @@ use std::sync::Arc;
 use http::{Method, Request, Response, StatusCode};
 use hyper::body::Incoming;
 
+use crate::context::{MatchedPattern, RequestContext};
 use crate::discovery::HeaderParamInfo;
 use crate::error::ErrorVariant;
 use crate::extract::PathParams;
@@ -488,6 +489,19 @@ impl Router {
     pub fn resolve_pattern(&self, method: &Method, path: &str) -> Option<&str> {
         self.resolve(method, path)
             .map(|(idx, _)| self.routes[idx].1.pattern.as_str())
+    }
+
+    /// Inserts the [`RequestContext`] and, when a route matches, the abstract
+    /// [`MatchedPattern`] (e.g. `/users/:id`) into the request extensions.
+    /// Shared by the live server and the test client so the two can't drift.
+    pub(crate) fn prepare_request(&self, req: &mut Request<Incoming>) -> RequestContext {
+        let ctx = RequestContext::new();
+        req.extensions_mut().insert(ctx.clone());
+        if let Some(pattern) = self.resolve_pattern(req.method(), req.uri().path()) {
+            req.extensions_mut()
+                .insert(MatchedPattern(pattern.to_string()));
+        }
+        ctx
     }
 
     /// Handles an incoming request by matching it to a route.

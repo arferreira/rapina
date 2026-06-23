@@ -4,9 +4,7 @@
 //! the `rapina_jobs` table, an in-process worker that polls and dispatches jobs,
 //! and the core types used by the `#[job]` macro.
 //!
-//! **Note:** The migration uses PostgreSQL-specific features (`gen_random_uuid()`,
-//! partial indexes, `FOR UPDATE SKIP LOCKED`). MySQL and SQLite are not currently
-//! supported for background jobs.
+//! **Note:** Supports PostgreSQL, MySQL 8.0+, and SQLite 3.35+.
 //!
 //! # Setup
 //!
@@ -95,11 +93,13 @@
 //! includes the original value so all log lines emitted during handler
 //! execution are correlated with the HTTP request that enqueued the job.
 
+pub(crate) mod backend;
 pub mod create_rapina_jobs;
 mod model;
 pub(crate) mod retry;
 pub(crate) mod worker;
 
+pub(crate) use create_rapina_jobs::RapinaJobs;
 pub use model::{JobRow, JobStatus};
 pub use retry::RetryPolicy;
 pub use worker::JobConfig;
@@ -108,7 +108,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -254,57 +254,37 @@ async fn insert_job<C>(
 where
     C: ConnectionTrait,
 {
-    // rapina_jobs is PostgreSQL-only (gen_random_uuid(), partial indexes).
-    // If this panics, the user enabled a non-postgres database feature.
-    debug_assert_eq!(
-        conn.get_database_backend(),
-        DbBackend::Postgres,
-        "Jobs require PostgreSQL — rapina_jobs uses gen_random_uuid() and partial indexes"
-    );
+    let id = Uuid::new_v4();
 
-    let stmt = build_insert_stmt(req, trace_id);
+    let stmt = match conn.get_database_backend() {
+        DbBackend::Postgres => backend::Postgres::build_insert_stmt(req, trace_id, id),
+        DbBackend::MySql => backend::Mysql::build_insert_stmt(req, trace_id, id),
+        DbBackend::Sqlite => backend::Sqlite::build_insert_stmt(req, trace_id, id),
+    };
 
-    let row = conn
-        .query_one(stmt)
+    conn.execute(stmt)
         .await
-        .map_err(|e| crate::error::Error::internal(format!("failed to enqueue job: {e}")))?
-        .ok_or_else(|| crate::error::Error::internal("INSERT INTO rapina_jobs returned no rows"))?;
-
-    let id: Uuid = row
-        .try_get("", "id")
-        .map_err(|e| crate::error::Error::internal(format!("failed to read job id: {e}")))?;
+        .map_err(|e| crate::error::Error::internal(format!("failed to enqueue job: {e}")))?;
 
     Ok(id)
-}
-
-fn build_insert_stmt(req: JobRequest, trace_id: Option<&str>) -> Statement {
-    Statement::from_sql_and_values(
-        DbBackend::Postgres,
-        "INSERT INTO rapina_jobs (job_type, queue, payload, max_retries, trace_id) \
-         VALUES ($1, $2, $3, $4, $5) \
-         RETURNING id",
-        [
-            req.job_type.into(),
-            req.queue.into(),
-            req.payload.into(),
-            req.max_retries.into(),
-            trace_id.map(ToOwned::to_owned).into(),
-        ],
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn job_request_fields() {
-        let req = JobRequest {
+    fn sample_req() -> JobRequest {
+        JobRequest {
             job_type: "send_email",
             payload: serde_json::json!({ "to": "test@example.com" }),
             queue: "emails",
             max_retries: 5,
-        };
+        }
+    }
+
+    #[test]
+    fn job_request_fields() {
+        let req = sample_req();
         assert_eq!(req.job_type, "send_email");
         assert_eq!(req.queue, "emails");
         assert_eq!(req.max_retries, 5);
@@ -313,7 +293,6 @@ mod tests {
 
     #[test]
     fn default_convention() {
-        // Verify the defaults the macro uses match what callers expect.
         let req = JobRequest {
             job_type: "process_event",
             payload: serde_json::Value::Null,
@@ -326,7 +305,6 @@ mod tests {
 
     #[test]
     fn max_retries_is_i32() {
-        // Must match the INTEGER column in rapina_jobs — same type as JobRow::max_retries.
         let req = JobRequest {
             job_type: "t",
             payload: serde_json::Value::Null,
@@ -337,58 +315,83 @@ mod tests {
     }
 
     #[test]
-    fn insert_stmt_has_correct_sql() {
-        let req = JobRequest {
-            job_type: "send_email",
-            payload: serde_json::json!({"to": "a@b.com"}),
-            queue: "emails",
-            max_retries: 5,
-        };
-        let stmt = build_insert_stmt(req, Some("trace-123"));
-        assert!(stmt.sql.contains("INSERT INTO rapina_jobs"));
-        assert!(stmt.sql.contains("RETURNING id"));
-    }
-
-    #[test]
-    fn insert_stmt_uses_postgres_backend() {
-        let req = JobRequest {
-            job_type: "t",
-            payload: serde_json::Value::Null,
-            queue: "default",
-            max_retries: 3,
-        };
-        let stmt = build_insert_stmt(req, None);
+    fn postgres_insert_stmt_uses_dollar_params() {
+        let req = sample_req();
+        let stmt = backend::Postgres::build_insert_stmt(req, None, Uuid::new_v4());
+        assert!(stmt.sql.contains("$1::uuid"), "Postgres uses $N params");
         assert_eq!(stmt.db_backend, DbBackend::Postgres);
     }
 
     #[test]
-    fn insert_stmt_trace_id_some() {
-        let req = JobRequest {
-            job_type: "t",
-            payload: serde_json::Value::Null,
-            queue: "default",
-            max_retries: 3,
-        };
-        let stmt = build_insert_stmt(req, Some("abc-123"));
-        // 5 params: job_type, queue, payload, max_retries, trace_id
-        assert_eq!(stmt.values.as_ref().map(|v| v.0.len()), Some(5));
-        let trace_val = &stmt.values.as_ref().unwrap().0[4];
-        assert_eq!(
-            *trace_val,
-            sea_orm::Value::String(Some(Box::new("abc-123".to_owned())))
-        );
+    fn postgres_insert_stmt_uses_string_uuid() {
+        let req = sample_req();
+        let stmt = backend::Postgres::build_insert_stmt(req, Some("trace-1"), Uuid::new_v4());
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[0], sea_orm::Value::String(Some(_))));
     }
 
     #[test]
-    fn insert_stmt_trace_id_none() {
-        let req = JobRequest {
-            job_type: "t",
-            payload: serde_json::Value::Null,
-            queue: "default",
-            max_retries: 3,
-        };
-        let stmt = build_insert_stmt(req, None);
-        let trace_val = &stmt.values.as_ref().unwrap().0[4];
-        assert_eq!(*trace_val, sea_orm::Value::String(None));
+    fn mysql_insert_stmt_has_current_timestamp() {
+        let req = sample_req();
+        let stmt = backend::Mysql::build_insert_stmt(req, None, Uuid::new_v4());
+        assert!(stmt.sql.contains("CURRENT_TIMESTAMP"));
+        assert_eq!(stmt.db_backend, DbBackend::MySql);
+    }
+
+    #[test]
+    fn mysql_insert_stmt_uses_uuid_value() {
+        let req = sample_req();
+        let stmt = backend::Mysql::build_insert_stmt(req, None, Uuid::new_v4());
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[0], sea_orm::Value::Uuid(Some(_))));
+    }
+
+    #[test]
+    fn sqlite_insert_stmt_uses_datetime_now() {
+        let req = sample_req();
+        let stmt = backend::Sqlite::build_insert_stmt(req, None, Uuid::new_v4());
+        assert!(stmt.sql.contains("datetime('now')"));
+        assert_eq!(stmt.db_backend, DbBackend::Sqlite);
+    }
+
+    #[test]
+    fn sqlite_insert_stmt_uses_string_uuid() {
+        let req = sample_req();
+        let stmt = backend::Sqlite::build_insert_stmt(req, None, Uuid::new_v4());
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[0], sea_orm::Value::String(Some(_))));
+    }
+
+    #[test]
+    fn mysql_retry_stmt_uses_microsecond() {
+        let stmt = backend::Mysql::build_retry_stmt(Uuid::new_v4(), "err", 1.7);
+        assert!(
+            stmt.sql.contains("MICROSECOND"),
+            "MySQL retry stmt should use MICROSECOND: {}",
+            stmt.sql
+        );
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[1], sea_orm::Value::BigInt(Some(_))));
+    }
+
+    #[test]
+    fn mysql_build_retry_stmt_uses_uuid_value() {
+        let stmt = backend::Mysql::build_retry_stmt(Uuid::new_v4(), "err", 0.5);
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[2], sea_orm::Value::Uuid(Some(_))));
+    }
+
+    #[test]
+    fn sqlite_build_retry_stmt_uses_string_uuid() {
+        let stmt = backend::Sqlite::build_retry_stmt(Uuid::new_v4(), "err", 0.5);
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[2], sea_orm::Value::String(Some(_))));
+    }
+
+    #[test]
+    fn postgres_build_retry_stmt_uses_string_uuid() {
+        let stmt = backend::Postgres::build_retry_stmt(Uuid::new_v4(), "err", 0.5);
+        let vals = stmt.values.as_ref().unwrap();
+        assert!(matches!(&vals.0[2], sea_orm::Value::String(Some(_))));
     }
 }

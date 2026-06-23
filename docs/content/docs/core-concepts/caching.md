@@ -142,7 +142,7 @@ If you're running multiple Rapina services against the same Redis, use `RedisCac
 use rapina::cache::CacheMiddleware;
 use rapina::cache_redis::RedisCache;
 
-let backend = RedisCache::connect("redis://localhost:6379")
+let backend = RedisCache::connect("redis://localhost:6379", None)
     .await?
     .with_prefix("myapp:");
 
@@ -153,8 +153,19 @@ Rapina::new()
     .await
 ```
 
----
 
+#### TLS Certificates
+
+If you also want to use a certificate alongside the redis, pass it after the url like this:
+
+```rust
+CacheConfig::redis_with_tls("rediss://localhost", RedisTlsConfig {
+    ca_cert: Some(std::fs::read("ca.pem")?),
+    client_cert: Some(std::fs::read("client.pem")?),
+    client_key: Some(std::fs::read("client.key")?),
+})
+```
+---
 ## Response Headers
 
 Every cached GET response includes an `x-cache` header:

@@ -47,6 +47,7 @@ pub fn execute(config: DoctorConfig) -> Result<(), String> {
     check_error_documentation(&routes, &mut result);
     check_openapi_metadata(&openapi, &mut result);
     check_duplicate_routes(&routes, &mut result);
+    check_llms_txt(&config.host, config.port, &mut result);
 
     print_results(&result);
 
@@ -313,6 +314,37 @@ fn check_openapi_metadata(openapi: &Result<Value, String>, result: &mut Diagnost
             result
                 .warnings
                 .push(format!("Missing documentation: {}", op));
+        }
+    }
+}
+
+/// Check that /__rapina/llms.txt is reachable and not returning 404.
+fn check_llms_txt(host: &str, port: u16, result: &mut DiagnosticResult) {
+    let url = urls::build_llms_url(host, port);
+    match crate::common::AGENT.get(&url).call() {
+        Ok(_) => {
+            result
+                .passed
+                .push("llms.txt is enabled and reachable".to_string());
+        }
+        Err(ureq::Error::StatusCode(404)) => {
+            result.warnings.push(
+                "llms.txt endpoint returns 404 — disabled in release builds by default. \
+                Call enable_llms_txt() on your App to turn it on."
+                    .to_string(),
+            );
+        }
+        Err(ureq::Error::StatusCode(status)) => {
+            result.warnings.push(format!(
+                "llms.txt endpoint returned unexpected status {status} — expected 200"
+            ));
+        }
+        Err(_) => {
+            result.warnings.push(
+                "llms.txt endpoint is unreachable — disabled in release builds by default. \
+                Call enable_llms_txt() on your App to turn it on."
+                    .to_string(),
+            );
         }
     }
 }
@@ -628,5 +660,67 @@ mod tests {
     fn test_fetch_json_connection_refused() {
         let result = fetch_json("http://127.0.0.1:1");
         assert!(result.is_err());
+    }
+
+    fn serve_once(status: u16, body: &'static str) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            use std::io::Read;
+            let _ = stream.read(&mut buf);
+            let status_text = if status == 200 { "OK" } else { "Not Found" };
+            let response = format!(
+                "HTTP/1.1 {status} {status_text}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            use std::io::Write;
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        port
+    }
+
+    #[test]
+    fn check_llms_txt_passes_when_200() {
+        let port = serve_once(200, "# LLMs\n");
+        let mut result = DiagnosticResult {
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            passed: Vec::new(),
+        };
+        check_llms_txt("127.0.0.1", port, &mut result);
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.passed.len(), 1);
+        assert!(result.passed[0].contains("llms.txt"));
+    }
+
+    #[test]
+    fn check_llms_txt_warns_when_404() {
+        let port = serve_once(404, "");
+        let mut result = DiagnosticResult {
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            passed: Vec::new(),
+        };
+        check_llms_txt("127.0.0.1", port, &mut result);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("404"));
+        assert!(result.warnings[0].contains("enable_llms_txt()"));
+        assert!(result.passed.is_empty());
+    }
+
+    #[test]
+    fn check_llms_txt_warns_when_unreachable() {
+        let mut result = DiagnosticResult {
+            warnings: Vec::new(),
+            errors: Vec::new(),
+            passed: Vec::new(),
+        };
+        check_llms_txt("127.0.0.1", 1, &mut result);
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("unreachable"));
+        assert!(result.warnings[0].contains("enable_llms_txt()"));
+        assert!(result.passed.is_empty());
     }
 }

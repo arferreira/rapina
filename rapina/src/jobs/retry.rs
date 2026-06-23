@@ -1,7 +1,9 @@
 use std::time::Duration;
 
-use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+use sea_orm::{ConnectionTrait, DbBackend};
 use uuid::Uuid;
+
+use crate::jobs::backend::{Mysql, Postgres, Sqlite};
 
 /// Controls how a failed job is retried.
 ///
@@ -135,43 +137,22 @@ pub(crate) async fn apply_failure(
 ) -> Result<(), sea_orm::DbErr> {
     let new_attempts = attempts + 1;
 
-    if new_attempts < max_retries {
+    let stmt = if new_attempts < max_retries {
         let delay_secs = policy.backoff_delay(new_attempts, job_id).as_secs_f64();
-
-        db.execute(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            r#"UPDATE rapina_jobs
-               SET attempts     = attempts + 1,
-                   last_error   = $1,
-                   status       = 'pending',
-                   run_at       = NOW() + make_interval(secs => $2),
-                   locked_until = NULL,
-                   started_at   = NULL
-               WHERE id = $3::uuid"#,
-            [
-                Value::String(Some(Box::new(error.to_owned()))),
-                Value::Double(Some(delay_secs)),
-                Value::String(Some(Box::new(job_id.to_string()))),
-            ],
-        ))
-        .await?;
+        match db.get_database_backend() {
+            DbBackend::Postgres => Postgres::build_retry_stmt(job_id, error, delay_secs),
+            DbBackend::MySql => Mysql::build_retry_stmt(job_id, error, delay_secs),
+            DbBackend::Sqlite => Sqlite::build_retry_stmt(job_id, error, delay_secs),
+        }
     } else {
-        db.execute(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            r#"UPDATE rapina_jobs
-               SET attempts    = attempts + 1,
-                   last_error  = $1,
-                   status      = 'failed',
-                   finished_at = NOW()
-               WHERE id = $2::uuid"#,
-            [
-                Value::String(Some(Box::new(error.to_owned()))),
-                Value::String(Some(Box::new(job_id.to_string()))),
-            ],
-        ))
-        .await?;
-    }
+        match db.get_database_backend() {
+            DbBackend::Postgres => Postgres::build_fail_stmt(job_id, error),
+            DbBackend::MySql => Mysql::build_fail_stmt(job_id, error),
+            DbBackend::Sqlite => Sqlite::build_fail_stmt(job_id, error),
+        }
+    };
 
+    db.execute(stmt).await?;
     Ok(())
 }
 
@@ -180,17 +161,12 @@ pub(crate) async fn apply_success(
     db: &impl ConnectionTrait,
     job_id: Uuid,
 ) -> Result<(), sea_orm::DbErr> {
-    db.execute(Statement::from_sql_and_values(
-        DbBackend::Postgres,
-        r#"UPDATE rapina_jobs
-           SET status       = 'completed',
-               finished_at  = NOW(),
-               locked_until = NULL
-           WHERE id = $1::uuid"#,
-        [Value::String(Some(Box::new(job_id.to_string())))],
-    ))
-    .await?;
-
+    let stmt = match db.get_database_backend() {
+        DbBackend::Postgres => Postgres::build_success_stmt(job_id),
+        DbBackend::MySql => Mysql::build_success_stmt(job_id),
+        DbBackend::Sqlite => Sqlite::build_success_stmt(job_id),
+    };
+    db.execute(stmt).await?;
     Ok(())
 }
 

@@ -84,13 +84,14 @@ async fn get_user(
         <div class="showcase-container">
             <div class="showcase-text">
                 <h2 class="gradient-text-subtle">Just Add #[public]</h2>
-                <p>Every route is authenticated. Write your handler, access the user's claims directly from the function signature. Need a public endpoint? One attribute. No middleware chains, no guard configs, no forgetting to protect a route.</p>
+                <p>Every route is authenticated. Write your handler, access the current user's data directly from the function signature. Need a public endpoint? One attribute. No middleware chains, no guard configs, no forgetting to protect a route.</p>
             </div>
             <div class="showcase-code code-showcase">
                 <pre><code class="language-rust">#[get("/me")]
-async fn me(claims: Claims) -&gt; Result&lt;Json&lt;User&gt;&gt; {
-    // claims.sub is the authenticated user
-    Ok(Json(find_user(claims.sub).await?))
+async fn me(user: CurrentUser) -&gt; Result&lt;Json&lt;User&gt;&gt; {
+    // Uses the authenticated user's id to query the database
+    // and returns a JSON response containing the queried info
+    Ok(Json(find_user(user.id).await?))
 }
 
 #[public]

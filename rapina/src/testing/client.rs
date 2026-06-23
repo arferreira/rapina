@@ -16,7 +16,6 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::context::RequestContext;
 use crate::middleware::MiddlewareStack;
 use crate::response::{APPLICATION_JSON, FORM_CONTENT_TYPE};
 use crate::router::Router;
@@ -91,8 +90,7 @@ impl TestClient {
                                         let state = state.clone();
                                         let middlewares = middlewares.clone();
 
-                                        let ctx = RequestContext::new();
-                                        req.extensions_mut().insert(ctx.clone());
+                                        let ctx = router.prepare_request(&mut req);
 
                                         async move {
                                             let response = middlewares.execute(req, router, state, &ctx).await;

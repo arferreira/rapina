@@ -10,9 +10,12 @@
 //!                   ↘ failed   (or back to pending if retries remain)
 //! ```
 //!
-//! The worker atomically transitions each job from `pending` to `running` via
-//! a CTE-based `UPDATE … RETURNING` with `FOR UPDATE SKIP LOCKED`, so
-//! multiple concurrent workers never claim the same row.
+//! The worker atomically transitions each job from `pending` to `running`
+//! using backend-specific claiming strategies:
+//!
+//! - **PostgreSQL:** CTE + `UPDATE … FROM` + `RETURNING` + `FOR UPDATE SKIP LOCKED`
+//! - **MySQL 8.0+:** transaction with `SELECT … FOR UPDATE SKIP LOCKED`, then `UPDATE`
+//! - **SQLite 3.35+:** `UPDATE … WHERE id IN (subquery) … RETURNING`
 //!
 //! # Graceful shutdown
 //!
@@ -31,9 +34,10 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, FromQueryResult, Statement, Value};
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use tracing::Instrument;
 
+use crate::jobs::backend::{Mysql, Postgres, Sqlite};
 use crate::jobs::retry::{apply_failure, apply_success};
 use crate::jobs::{JobDescriptor, JobResult, JobRow, RetryPolicy};
 use crate::state::AppState;
@@ -309,69 +313,19 @@ fn build_policy(retry_policy: &str, max_retries: i32, delay_secs: f64) -> RetryP
 /// Claims up to `config.batch_size` jobs from the subscribed queues in a
 /// single atomic statement and returns their rows.
 ///
-/// Uses `FOR UPDATE SKIP LOCKED` so concurrent workers never claim the same
-/// row, and the CTE + `UPDATE … FROM` ensures the transition from `pending`
-/// to `running` is a single round-trip.
+/// Uses backend-specific claiming strategies:
+/// - **PostgreSQL:** CTE + `UPDATE … FROM` + `RETURNING` + `FOR UPDATE SKIP LOCKED`
+/// - **MySQL 8.0+:** transaction with `SELECT … FOR UPDATE SKIP LOCKED`, then `UPDATE`
+/// - **SQLite 3.35+:** `UPDATE … WHERE id IN (subquery) … RETURNING` (single-writer, no SKIP LOCKED needed)
 async fn claim_batch(
     db: &DatabaseConnection,
     config: &JobConfig,
 ) -> Result<Vec<JobRow>, sea_orm::DbErr> {
-    let stmt = build_claim_stmt(config);
-    let rows = db.query_all(stmt).await?;
-    rows.iter()
-        .map(|row| JobRow::from_query_result(row, ""))
-        .collect()
-}
-
-/// Builds the claiming statement for [`claim_batch`].
-///
-/// Generates dynamic `IN ($1, $2, …)` placeholders for the queue list so the
-/// number of parameters matches the number of subscribed queues without
-/// requiring PostgreSQL array literals (which SeaORM's plain `Value` type
-/// does not support directly).
-///
-/// Parameter layout:
-/// - `$1 … $n` — queue names (one per configured queue)
-/// - `$n+1`    — batch size (`INTEGER`)
-/// - `$n+2`    — job timeout in fractional seconds (`DOUBLE PRECISION`)
-fn build_claim_stmt(config: &JobConfig) -> Statement {
-    // One placeholder per queue, e.g. "$1, $2, $3".
-    let placeholders = (1..=config.queues.len())
-        .map(|i| format!("${i}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let batch_param = config.queues.len() + 1;
-    let timeout_param = config.queues.len() + 2;
-
-    let sql = format!(
-        r#"WITH claimed AS (
-               SELECT id FROM rapina_jobs
-               WHERE  status  = 'pending'
-                 AND  queue   IN ({placeholders})
-                 AND  run_at <= NOW()
-               ORDER  BY run_at ASC
-               LIMIT  ${batch_param}
-               FOR UPDATE SKIP LOCKED
-           )
-           UPDATE rapina_jobs
-           SET status       = 'running',
-               started_at   = NOW(),
-               locked_until = NOW() + make_interval(secs => ${timeout_param})
-           FROM claimed
-           WHERE rapina_jobs.id = claimed.id
-           RETURNING rapina_jobs.*"#
-    );
-
-    let mut values: Vec<Value> = config
-        .queues
-        .iter()
-        .map(|q| Value::String(Some(Box::new(q.clone()))))
-        .collect();
-    values.push(Value::Int(Some(config.batch_size)));
-    values.push(Value::Double(Some(config.job_timeout.as_secs_f64())));
-
-    Statement::from_sql_and_values(DbBackend::Postgres, &sql, values)
+    match db.get_database_backend() {
+        sea_orm::DbBackend::Postgres => Postgres::claim_batch(db, config).await,
+        sea_orm::DbBackend::MySql => Mysql::claim_batch(db, config).await,
+        sea_orm::DbBackend::Sqlite => Sqlite::claim_batch(db, config).await,
+    }
 }
 
 #[cfg(test)]
@@ -472,72 +426,5 @@ mod tests {
         assert_eq!(config.batch_size, 5);
         assert_eq!(config.queues, vec!["emails", "default"]);
         assert_eq!(config.job_timeout, Duration::from_secs(60));
-    }
-
-    #[test]
-    fn build_claim_stmt_sql_shape() {
-        let config = JobConfig::default(); // one queue: "default"
-        let stmt = build_claim_stmt(&config);
-        let sql = &stmt.sql;
-
-        assert!(
-            sql.contains("FOR UPDATE SKIP LOCKED"),
-            "should lock claimed rows"
-        );
-        assert!(sql.contains("'running'"), "should transition to running");
-        assert!(sql.contains("locked_until"), "should set lock expiry");
-        assert!(
-            sql.contains("RETURNING rapina_jobs.*"),
-            "should return the claimed rows"
-        );
-        assert!(sql.contains("run_at <= NOW()"), "should filter by run_at");
-    }
-
-    #[test]
-    fn build_claim_stmt_param_count_single_queue() {
-        // 1 queue + batch_size + timeout = 3 params
-        let config = JobConfig::default();
-        let stmt = build_claim_stmt(&config);
-        let params = stmt.values.as_ref().map(|v| v.0.len()).unwrap_or(0);
-        assert_eq!(params, 3);
-    }
-
-    #[test]
-    fn build_claim_stmt_param_count_multiple_queues() {
-        // 3 queues + batch_size + timeout = 5 params
-        let config = JobConfig::default().queues(["default", "emails", "heavy"]);
-        let stmt = build_claim_stmt(&config);
-        let params = stmt.values.as_ref().map(|v| v.0.len()).unwrap_or(0);
-        assert_eq!(params, 5);
-    }
-
-    #[test]
-    fn build_claim_stmt_uses_postgres_backend() {
-        let stmt = build_claim_stmt(&JobConfig::default());
-        assert_eq!(stmt.db_backend, DbBackend::Postgres);
-    }
-
-    #[test]
-    fn build_claim_stmt_queue_values() {
-        let config = JobConfig::default().queues(["emails"]);
-        let stmt = build_claim_stmt(&config);
-        let values = &stmt.values.as_ref().unwrap().0;
-        assert_eq!(
-            values[0],
-            Value::String(Some(Box::new("emails".to_string())))
-        );
-    }
-
-    #[test]
-    fn build_claim_stmt_batch_and_timeout_values() {
-        let config = JobConfig::default()
-            .batch_size(7)
-            .job_timeout(Duration::from_secs(45));
-        let stmt = build_claim_stmt(&config);
-        let values = &stmt.values.as_ref().unwrap().0;
-
-        // 1 queue + batch + timeout → indices 1 and 2
-        assert_eq!(values[1], Value::Int(Some(7)));
-        assert_eq!(values[2], Value::Double(Some(45.0)));
     }
 }

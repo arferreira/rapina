@@ -96,7 +96,7 @@ opentelemetry-otlp = { version = "0.32", optional = true, default-features = fal
 tracing-opentelemetry = { version = "0.33", optional = true }
 
 # Redis cache backend (optional)
-redis = { version = "1.2", optional = true, features = ["tokio-comp"] }
+redis = { version = "1.2", optional = true, features = ["tokio-rustls-comp"] }
 
 # Tower compatibility (optional)
 tower-service = { version = "0.3", optional = true }

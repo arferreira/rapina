@@ -119,19 +119,47 @@ async fn test_metrics_duration_histogram_populated() {
     assert!(body.contains("http_request_duration_seconds_count"));
 }
 
-// ── path normalisation ────────────────────────────────────────────────────────
+// ── route-pattern labelling ───────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_metrics_numeric_path_segments_normalised() {
+async fn test_metrics_label_uses_matched_route_pattern() {
     let client = TestClient::new(app_with_metrics()).await;
 
+    // Numeric, UUID, and slug params all hit the same registered route. The old
+    // numeric-only heuristic collapsed the first and let the other two through
+    // verbatim, one fresh time series each.
     client.get("/users/42").send().await;
+    client
+        .get("/users/e58ed763-928c-4155-bee9-fdbaaadc15f6")
+        .send()
+        .await;
+    client.get("/users/whatever").send().await;
 
     let body = client.get("/metrics").send().await.text();
-    // The raw ID must NOT appear as a label value
-    assert!(!body.contains(r#"path="/users/42""#));
-    // The normalised form must appear instead
+
+    // Every variant collapses to the route the developer registered.
     assert!(body.contains(r#"path="/users/:id""#));
+    // No raw param value leaks into label cardinality.
+    assert!(!body.contains(r#"path="/users/42""#));
+    assert!(!body.contains("e58ed763-928c-4155-bee9-fdbaaadc15f6"));
+    assert!(!body.contains(r#"path="/users/whatever""#));
+}
+
+#[tokio::test]
+async fn test_metrics_unmatched_path_uses_sentinel() {
+    let client = TestClient::new(app_with_metrics()).await;
+
+    // A request that matches no route. Without a sentinel, a scanner spraying
+    // random URLs would mint a new series per request.
+    client
+        .get("/nope/2f1c8e90-1111-2222-3333-444455556666")
+        .send()
+        .await;
+
+    let body = client.get("/metrics").send().await.text();
+
+    assert!(body.contains(r#"path="<unmatched>""#));
+    assert!(!body.contains("2f1c8e90-1111-2222-3333-444455556666"));
 }
 
 // ── disabled by default ───────────────────────────────────────────────────────

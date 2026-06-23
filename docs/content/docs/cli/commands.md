@@ -28,14 +28,14 @@ This creates:
 
 ### Options
 
-| Flag | Description |
-|------|-------------|
-| `--template <T>` | Starter template: `rest-api` (default), `crud`, `auth` |
-| `--db <DB>` | Database: `sqlite`, `postgres`, `mysql`. Required for `--template crud` |
-| `--no-ai` | Skip all AI files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules`, `.rapina-docs/`) |
-| `--no-agents-md` | Skip `AGENTS.md` and `CLAUDE.md` only |
-| `--no-bundled-docs` | Skip `.rapina-docs/` only |
-| `--agents-md-only` | Generate `AGENTS.md` and `CLAUDE.md` but skip `.rapina-docs/` and `.cursor/rules` |
+| Flag                | Description                                                                       |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `--template <T>`    | Starter template: `rest-api` (default), `crud`, `auth`                            |
+| `--db <DB>`         | Database: `sqlite`, `postgres`, `mysql`. Required for `--template crud`           |
+| `--no-ai`           | Skip all AI files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules`, `.rapina-docs/`)    |
+| `--no-agents-md`    | Skip `AGENTS.md` and `CLAUDE.md` only                                             |
+| `--no-bundled-docs` | Skip `.rapina-docs/` only                                                         |
+| `--agents-md-only`  | Generate `AGENTS.md` and `CLAUDE.md` but skip `.rapina-docs/` and `.cursor/rules` |
 
 Examples:
 
@@ -308,6 +308,7 @@ Doctor runs two classes of checks:
 - Error documentation present
 - OpenAPI metadata (descriptions)
 - No duplicate handler paths
+- `llms.txt` endpoint reachable (warns if disabled — enabled by default in debug builds, disabled in release builds; call `enable_llms_txt()` on your `App` to enable it in production)
 
 Output:
 
@@ -317,18 +318,19 @@ Output:
 
   ✓ All routes have response schemas
   ✓ No duplicate handler paths
+  ✓ llms.txt is enabled and reachable
   ⚠ Missing documentation: GET /users/:id
   ⚠ No documented errors: POST /users
 
-  Summary: 2 passed, 2 warnings, 0 errors
+  Summary: 3 passed, 2 warnings, 0 errors
 ```
 
 ### Options
 
-| Flag | Description |
-|------|-------------|
-| `--fix-agents` | Refresh `AGENTS.md` from current bundled fragments |
-| `--force` | With `--fix-agents`: overwrite even if the block has user edits inside the markers |
+| Flag           | Description                                                                        |
+| -------------- | ---------------------------------------------------------------------------------- |
+| `--fix-agents` | Refresh `AGENTS.md` from current bundled fragments                                 |
+| `--force`      | With `--fix-agents`: overwrite even if the block has user edits inside the markers |
 
 ### Fixing a stale `AGENTS.md`
 
@@ -352,7 +354,9 @@ If you want to keep your custom content, move it outside the markers first:
 <!-- your custom rules here — above the managed block -->
 
 <!-- BEGIN:rapina-agent-rules v0.11.0 sha256:... -->
+
 ...managed content, do not edit...
+
 <!-- END:rapina-agent-rules -->
 
 <!-- or below the managed block -->
