@@ -25,7 +25,7 @@ pub(crate) fn parse_schema_content(content: &str) -> Result<Vec<ParsedEntity>, S
         if line.trim().starts_with("schema!") {
             // One block can hold several entities (the macro parses them with
             // `while !input.is_empty()`), so keep going until the block closes.
-            while let Some(entity) = parse_one_entity(&mut lines)? {
+            while let Some(entity) = parse_next_entity(&mut lines)? {
                 entities.push(entity);
             }
         }
@@ -38,7 +38,7 @@ pub(crate) fn parse_schema_content(content: &str) -> Result<Vec<ParsedEntity>, S
     Ok(entities)
 }
 
-fn parse_one_entity(lines: &mut std::str::Lines) -> Result<Option<ParsedEntity>, String> {
+fn parse_next_entity(lines: &mut std::str::Lines) -> Result<Option<ParsedEntity>, String> {
     let mut pending: Vec<&str> = Vec::new();
 
     // buffer entity attrs, then the next real line is the entity name.
