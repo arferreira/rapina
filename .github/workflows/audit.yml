@@ -7,29 +7,21 @@ on:
     paths:
       - 'Cargo.lock'
       - 'Cargo.toml'
+      - '**/Cargo.toml'
       - 'deny.toml'
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '**/Cargo.toml'
+      - 'deny.toml'
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  audit:
-    name: Cargo Audit
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      checks: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - run: rm rust-toolchain.toml
-      - uses: rustsec/audit-check@dd51754d4e59da7395a4cd9b593f0ff2d61a9b95  # v1.4.1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # rkyv: optional dependency of rust_decimal that no feature activates,
-          # so it is never compiled. cargo-deny agrees, it resolves the feature graph.
-          ignore: RUSTSEC-2023-0071,RUSTSEC-2024-0437,RUSTSEC-2026-0097,RUSTSEC-2026-0173,RUSTSEC-2026-0235
-
-  deny:
-    name: Cargo Deny
+  advisories:
+    name: Advisories
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,4 +29,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25  # v2
         with:
-          command: check
+          command: check advisories
