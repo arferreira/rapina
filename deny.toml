@@ -36,6 +36,10 @@ ignore = [
     # unsafe-libyaml: unmaintained - transitive via serde_yaml_ng (import-openapi feature),
     # and the whole serde_yaml family is deprecated, so no safe upgrade exists
     "RUSTSEC-2024-0449",
+    # libsqlite3-sys: bundled SQLite < 3.54 can leak page-cache memory when opening a db
+    # with an attacker-crafted -wal file. Needs >=0.39, locked by sqlx 0.8 via sea-orm 1.x.
+    # Remove with the sea-orm 2.0 upgrade (#751).
+    "RUSTSEC-2026-0459",
 ]
 
 [sources]
