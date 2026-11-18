@@ -23,23 +23,21 @@ multiple-versions = "allow"
 wildcards = "deny"
 
 [advisories]
+unmaintained = "workspace"
 ignore = [
     # rsa: Marvin Attack timing sidechannel - no safe upgrade available yet
     "RUSTSEC-2023-0071",
     # protobuf: stack overflow - locked by prometheus v0.13 depending on protobuf v2
     "RUSTSEC-2024-0437",
-    # proc-macro-error2: unmaintained - transitive via sea-orm and validator, no safe upgrade available
-    "RUSTSEC-2026-0173",
     # crypto-bigint: timing variability in constant-time ops - needs >=0.7.6, locked by
     # jsonwebtoken v11 -> p256/p384 -> elliptic-curve v0.13, which pins crypto-bigint 0.5
     "RUSTSEC-2026-0387",
-    # unsafe-libyaml: unmaintained - transitive via serde_yaml_ng (import-openapi feature),
-    # and the whole serde_yaml family is deprecated, so no safe upgrade exists
-    "RUSTSEC-2024-0449",
     # libsqlite3-sys: bundled SQLite < 3.54 can leak page-cache memory when opening a db
     # with an attacker-crafted -wal file. Needs >=0.39, locked by sqlx 0.8 via sea-orm 1.x.
     # Remove with the sea-orm 2.0 upgrade (#751).
     "RUSTSEC-2026-0459",
+    # chrono: unmaintained, no safe upgrade. Direct dep of rapina-cli.
+    "RUSTSEC-2026-0543",
 ]
 
 [sources]
