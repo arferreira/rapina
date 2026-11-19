@@ -32,14 +32,14 @@ async fn disc_remove() -> StatusCode {
 
 // ── Public handlers (both orderings) ────────────────────────────────────────
 
-// #[public] ABOVE #[get] — PublicMarker path
+// #[public] above #[get]
 #[public]
 #[get("/disc-pub-above")]
 async fn disc_pub_above() -> &'static str {
     "public above"
 }
 
-// #[public] BELOW #[get] — is_public path
+// #[public] below #[get]
 #[get("/disc-pub-below")]
 #[public]
 async fn disc_pub_below() -> &'static str {

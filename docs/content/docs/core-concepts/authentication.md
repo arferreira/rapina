@@ -49,7 +49,9 @@ async fn login(body: Json<LoginRequest>, auth: State<AuthConfig>) -> Result<Json
 }
 ```
 
-With `.discover()`, `#[public]` routes are automatically registered as public — no extra wiring needed. You can also register public routes programmatically if you prefer:
+With `.discover()`, `#[public]` routes are automatically registered as public, no extra wiring needed. `#[public]` can sit above or below the route macro, but it has to be on a route handler: anywhere else, including `#[relay]` and `#[job]` handlers, it's a compile error. Each discovered public route is logged at startup as `public route: METHOD /path`, so you can audit what's exposed.
+
+You can also register public routes programmatically if you prefer:
 
 ```rust
 Rapina::new()

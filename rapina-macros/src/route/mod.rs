@@ -102,7 +102,6 @@ fn route_macro_core(
     let func_name_str = func_name.to_string();
     let func_vis = &func.vis;
 
-    // Extract #[public] attribute if present (when #[public] is below the route macro)
     let is_public = extract_public_attr(&mut func.attrs);
 
     // Resolve description: explicit attr wins, then first rustdoc line, then None
@@ -948,6 +947,37 @@ mod tests {
         let output_str = output.to_string();
 
         assert!(output_str.contains("is_public : true"));
+    }
+
+    #[test]
+    fn test_moved_qualified_public_attr_sets_is_public_and_is_stripped() {
+        let path = quote!("/health");
+        let input = quote! {
+            #[rapina::public(__moved)]
+            async fn health() -> &'static str {
+                "ok"
+            }
+        };
+
+        let output = route_macro_core("GET", path, input);
+        let output_str = output.to_string();
+
+        assert!(output_str.contains("is_public : true"));
+        assert!(!output_str.contains("__moved"));
+    }
+
+    #[test]
+    #[should_panic(expected = "#[public] takes no arguments")]
+    fn test_public_attr_below_route_rejects_arguments() {
+        let path = quote!("/health");
+        let input = quote! {
+            #[public(false)]
+            async fn health() -> &'static str {
+                "ok"
+            }
+        };
+
+        route_macro_core("GET", path, input);
     }
 
     #[test]

@@ -955,16 +955,11 @@ impl Rapina {
         if self.auto_discover {
             let manual_count = self.router.routes.len();
 
-            let public_names: std::collections::HashSet<&str> =
-                inventory::iter::<crate::discovery::PublicMarker>
-                    .into_iter()
-                    .map(|m| m.handler_name)
-                    .collect();
-
             let mut discovered_public = 0usize;
             for descriptor in inventory::iter::<crate::discovery::RouteDescriptor> {
                 self.router = (descriptor.register)(self.router);
-                if descriptor.is_public || public_names.contains(descriptor.handler_name) {
+                if descriptor.is_public {
+                    tracing::info!("public route: {} {}", descriptor.method, descriptor.path);
                     self.public_routes.add(descriptor.method, descriptor.path);
                     discovered_public += 1;
                 }

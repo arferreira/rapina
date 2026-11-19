@@ -103,19 +103,39 @@ pub fn delete(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// Note: Routes starting with `/__rapina` are automatically public.
 #[proc_macro_attribute]
-pub fn public(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let func: ItemFn = syn::parse(item.clone()).expect("#[public] must be applied to a function");
-    let func_name_str = func.sig.ident.to_string();
-    let item2: proc_macro2::TokenStream = item.into();
-    quote! {
-        #item2
-        rapina::inventory::submit! {
-            rapina::discovery::PublicMarker {
-                handler_name: #func_name_str,
-            }
-        }
+pub fn public(attr: TokenStream, item: TokenStream) -> TokenStream {
+    public_core(attr.into(), item.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+const NOT_ON_ROUTE: &str = "#[public] must be placed on a route handler, next to #[get], #[post], #[put], #[patch] or #[delete]";
+
+// An attribute macro never sees itself in its input, so `#[public]` above a
+// route macro moves itself to the end of the attribute list, where the route
+// macro picks it up. `__moved` marks the second expansion: reaching it means
+// no route macro stripped the attribute.
+fn public_core(
+    attr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let span = proc_macro2::Span::call_site();
+    let mut func: ItemFn = syn::parse2(item)
+        .map_err(|_| syn::Error::new(span, "#[public] must be applied to a function"))?;
+
+    if !attr.is_empty() {
+        let moved = syn::parse2::<syn::Ident>(attr).is_ok_and(|ident| ident == "__moved");
+        let msg = if moved {
+            NOT_ON_ROUTE
+        } else {
+            "#[public] takes no arguments"
+        };
+        return Err(syn::Error::new(span, msg));
     }
-    .into()
+
+    func.attrs
+        .push(syn::parse_quote_spanned!(span=> #[rapina::public(__moved)]));
+    Ok(quote!(#func))
 }
 
 /// Registers a channel handler for the relay system.
@@ -364,8 +384,59 @@ pub fn schema(input: TokenStream) -> TokenStream {
 
 #[cfg(test)]
 mod tests {
-    use super::metric_macro_impl;
+    use super::{metric_macro_impl, public_core};
     use quote::quote;
+
+    #[test]
+    fn test_public_moves_itself_after_route_macro() {
+        let input = quote! {
+            #[get("/health")]
+            async fn health() -> &'static str { "ok" }
+        };
+
+        let output = public_core(quote!(), input).unwrap().to_string();
+
+        let route = output.find("get").unwrap();
+        let public = output.find("rapina :: public (__moved)").unwrap();
+        assert!(route < public);
+    }
+
+    #[test]
+    fn test_public_moved_without_route_macro_errors() {
+        let input = quote! {
+            #[doc = "no route macro here"]
+            async fn health() -> &'static str { "ok" }
+        };
+
+        let err = public_core(quote!(__moved), input).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must be placed on a route handler")
+        );
+    }
+
+    #[test]
+    fn test_public_rejects_arguments() {
+        let input = quote! {
+            #[get("/health")]
+            async fn health() -> &'static str { "ok" }
+        };
+
+        let err = public_core(quote!(always), input).unwrap_err();
+        assert!(err.to_string().contains("takes no arguments"));
+    }
+
+    #[test]
+    fn test_public_on_non_fn_errors() {
+        let err = public_core(
+            quote!(),
+            quote!(
+                struct Health;
+            ),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must be applied to a function"));
+    }
 
     #[test]
     fn test_metric_macro_generates_collector_fn_and_inventory() {

@@ -154,12 +154,29 @@ pub(crate) fn extract_cache_attr(attrs: &mut Vec<syn::Attribute>) -> Option<u64>
     ttl
 }
 
-/// Extract #[public] attribute from function attributes, removing it if found.
+/// Removes every `#[public]` / `#[rapina::public]` attribute, returning whether any was found.
 pub(crate) fn extract_public_attr(attrs: &mut Vec<syn::Attribute>) -> bool {
-    if let Some(idx) = attrs.iter().position(|attr| attr.path().is_ident("public")) {
-        attrs.remove(idx);
-        true
-    } else {
+    let before = attrs.len();
+    attrs.retain(|attr| {
+        if !is_public_path(attr.path()) {
+            return true;
+        }
+        let moved = matches!(&attr.meta, syn::Meta::List(list)
+            if list.parse_args::<syn::Ident>().is_ok_and(|ident| ident == "__moved"));
+        assert!(
+            moved || matches!(attr.meta, syn::Meta::Path(_)),
+            "#[public] takes no arguments"
+        );
         false
+    });
+    attrs.len() != before
+}
+
+fn is_public_path(path: &syn::Path) -> bool {
+    let mut segments = path.segments.iter().map(|s| &s.ident);
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(a), None, None) => a == "public",
+        (Some(a), Some(b), None) => a == "rapina" && b == "public",
+        _ => false,
     }
 }
