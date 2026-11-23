@@ -240,7 +240,8 @@ BodyLimitMiddleware::new(5 * 1024 * 1024)  // 5 MB
 
 Assigns a unique identifier to every request for distributed tracing.
 
-- Accepts an incoming `x-trace-id` header from upstream; otherwise generates a UUID v4
+- Accepts an incoming `x-trace-id` header from upstream, or `x-request-id` when `x-trace-id` is absent; otherwise generates a UUID v4
+- Only reuses an incoming ID of at most 128 bytes made of `A-Z a-z 0-9 - _ . :`; anything else is ignored in favor of the generated UUID
 - Echoes the trace ID back in the response header `x-trace-id`
 
 Access it in a handler via the `Context` extractor:

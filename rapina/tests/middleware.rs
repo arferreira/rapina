@@ -560,6 +560,103 @@ async fn test_trace_id_middleware_preserves_incoming_trace_id() {
     assert_eq!(header_value.to_str().unwrap(), custom_trace_id);
 }
 
+async fn trace_id_for_headers(headers: &[(&str, &str)]) -> String {
+    let app = Rapina::new()
+        .with_introspection(false)
+        .middleware(TraceIdMiddleware::new())
+        .router(
+            Router::new().route(http::Method::GET, "/health", |req, _, _| async move {
+                req.extensions()
+                    .get::<rapina::context::RequestContext>()
+                    .unwrap()
+                    .trace_id()
+                    .to_owned()
+            }),
+        );
+
+    let client = TestClient::new(app).await;
+    let mut request = client.get("/health");
+    for (name, value) in headers {
+        request = request.header(name, value);
+    }
+    let response = request.send().await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let header_value = response
+        .headers()
+        .get(TRACE_ID_HEADER)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(response.text(), header_value);
+    header_value
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_accepts_max_length_trace_id() {
+    let id = "a".repeat(128);
+    assert_eq!(trace_id_for_headers(&[("x-trace-id", &id)]).await, id);
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_ignores_oversized_trace_id() {
+    let id = "a".repeat(129);
+    let trace_id = trace_id_for_headers(&[("x-trace-id", &id)]).await;
+    assert_ne!(trace_id, id);
+    assert_eq!(trace_id.len(), 36);
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_ignores_trace_id_with_invalid_chars() {
+    for id in ["has space", "a/b", "a\"b", "{\"x\":1}"] {
+        let trace_id = trace_id_for_headers(&[("x-trace-id", id)]).await;
+        assert_ne!(trace_id, id);
+        assert_eq!(trace_id.len(), 36);
+    }
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_ignores_empty_trace_id() {
+    let trace_id = trace_id_for_headers(&[("x-trace-id", "")]).await;
+    assert_eq!(trace_id.len(), 36);
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_uses_x_request_id_when_trace_id_absent() {
+    let id = "req-1.a_b:2";
+    assert_eq!(trace_id_for_headers(&[("x-request-id", id)]).await, id);
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_prefers_x_trace_id_over_x_request_id() {
+    let trace_id = trace_id_for_headers(&[
+        ("x-trace-id", "from-trace"),
+        ("x-request-id", "from-request"),
+    ])
+    .await;
+    assert_eq!(trace_id, "from-trace");
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_ignores_invalid_x_request_id() {
+    let id = "a".repeat(129);
+    let trace_id = trace_id_for_headers(&[("x-request-id", &id)]).await;
+    assert_ne!(trace_id, id);
+    assert_eq!(trace_id.len(), 36);
+}
+
+#[tokio::test]
+async fn test_trace_id_middleware_does_not_fall_back_when_trace_id_invalid() {
+    let trace_id = trace_id_for_headers(&[
+        ("x-trace-id", "has space"),
+        ("x-request-id", "from-request"),
+    ])
+    .await;
+    assert_ne!(trace_id, "from-request");
+    assert_eq!(trace_id.len(), 36);
+}
+
 #[tokio::test]
 async fn test_timeout_middleware_rejects_slow_handler() {
     let app = Rapina::new()
