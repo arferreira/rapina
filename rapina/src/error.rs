@@ -86,6 +86,18 @@ pub(crate) fn json_response<T: Serialize>(
     }
 }
 
+/// Extracts a readable message from a panic payload, mirroring the default hook:
+/// `&str`/`String` verbatim, anything else a fallback.
+pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
 /// Standard error response format.
 pub mod standard {
     use serde::Serialize;

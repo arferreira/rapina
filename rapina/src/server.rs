@@ -20,6 +20,13 @@ use crate::state::AppState;
 /// A shutdown hook: a closure that returns a boxed future.
 pub(crate) type ShutdownHook = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
+/// The error a startup hook resolves to, erased to a boxed trait object.
+pub(crate) type StartupHookError = Box<dyn std::error::Error + Send + Sync>;
+
+/// A startup hook: a closure that returns a boxed, fallible future.
+pub(crate) type StartupHook =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), StartupHookError>> + Send>> + Send>;
+
 /// Start the HTTP server and block until a shutdown signal is received.
 ///
 /// Binds to `addr`, runs `router` behind `middlewares`, and performs a graceful

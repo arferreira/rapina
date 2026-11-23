@@ -45,6 +45,7 @@ use futures_util::FutureExt as _;
 use sea_orm::{ConnectionTrait, DatabaseConnection};
 use tracing::Instrument;
 
+use crate::error::panic_payload_message;
 use crate::jobs::backend::{Mysql, Postgres, Sqlite};
 use crate::jobs::retry::{apply_failure, apply_success};
 use crate::jobs::{JobDescriptor, JobRow, RetryPolicy};
@@ -570,7 +571,7 @@ impl Worker {
             Err(p) => (
                 Err(crate::error::Error::internal(format!(
                     "job handler panicked: {}",
-                    panic_message(&*p)
+                    panic_payload_message(&*p)
                 ))),
                 true,
             ),
@@ -621,18 +622,6 @@ fn build_policy(retry_policy: &str, max_retries: i32, delay_secs: f64) -> RetryP
         "fixed" => RetryPolicy::fixed(max_retries, delay),
         "none" => RetryPolicy::none(),
         _ => RetryPolicy::exponential(max_retries, delay),
-    }
-}
-
-/// Extracts a readable message from a panic payload, mirroring what the
-/// default hook prints: `&str`/`String` verbatim, anything else a fallback.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "non-string panic payload".to_string()
     }
 }
 
