@@ -35,6 +35,14 @@ cargo test
 cargo run -p rapina-cli -- new test-app
 ```
 
+Preferred local gate (matches the CI Check job):
+
+```bash
+just verify
+```
+
+See `AGENTS.md` for what that covers. `just verify-quick` is a faster default-features loop while iterating.
+
 ### Project Structure
 
 ```
@@ -80,8 +88,8 @@ Use conventional commit prefixes:
 
 ### Code Style
 
-- Run `cargo fmt` before committing
-- Run `cargo clippy` and address warnings
+- Prefer `just verify` before opening a PR (fmt, clippy with `--all-features`, build, tests)
+- Or run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test` yourself
 - Follow existing patterns in the codebase
 - Add tests for new functionality
 
@@ -105,9 +113,7 @@ Use conventional commit prefixes:
 
 ### PR Checklist
 
-- [ ] Tests pass (`cargo test`)
-- [ ] Code is formatted (`cargo fmt`)
-- [ ] No clippy warnings (`cargo clippy`)
+- [ ] `just verify` passes (or equivalent fmt / clippy `--all-features` / build / tests)
 - [ ] Documentation updated if needed
 - [ ] CHANGELOG.md updated for user-facing changes
 
